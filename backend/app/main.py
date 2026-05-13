@@ -52,7 +52,16 @@ app.add_middleware(
 
 @app.middleware("http")
 async def gate_middleware(request: Request, call_next):
-    """Reject unauthenticated requests (except login/health/check endpoints)."""
+    """Reject unauthenticated requests (except login/health/check endpoints).
+
+    CORS preflight (OPTIONS) requests are always allowed through so the
+    CORSMiddleware downstream can answer them. Preflight requests do not
+    carry the auth cookie, so gating them would break every cross-origin
+    GET/POST/etc. from the SWA frontend.
+    """
+    # Always allow CORS preflight — CORSMiddleware will respond appropriately.
+    if request.method == "OPTIONS":
+        return await call_next(request)
     path = request.url.path
     # Allow auth endpoints and health check through without cookie
     if path in ("/health", "/api/v1/auth/login", "/api/v1/auth/check"):
