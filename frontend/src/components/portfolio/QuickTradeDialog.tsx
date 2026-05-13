@@ -96,6 +96,13 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
     return q * eurPrice;
   }, [quantity, eurPrice]);
 
+  const eurFees = useMemo(() => {
+    const f = parseFloat(fees) || 0;
+    if (currency === 'EUR') return f;
+    if (!fxRate) return 0;
+    return f / fxRate;
+  }, [currency, fees, fxRate]);
+
   const mutation = useMutation({
     mutationFn: api.quickTrade,
     onSuccess: (result: { status: string; tax_filing_required?: boolean }, variables) => {
@@ -106,7 +113,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
         title: `${variables.trade_type === 'buy' ? 'Bought' : 'Sold'} ${variables.quantity} × ${variables.symbol}`,
       });
 
-      // If tax filing is required (e.g., MSFT sell), show tax calculation dialog
+      // tax dialog wants the fees value in EUR (already converted above)
       if (result.tax_filing_required && variables.trade_type === 'sell') {
         setTaxSellParams({
           symbol: variables.symbol,
@@ -163,7 +170,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
       price_per_share_native: parseFloat(price) || undefined,
       fx_rate: currency === 'USD' && fxRate ? fxRate : undefined,
       trade_date: tradeDate,
-      fees: parseFloat(fees) || 0,
+      fees: eurFees,
     });
   }
 
@@ -343,7 +350,9 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Commission (€)</label>
+              <label className="text-sm font-medium">
+                Commission {currency === 'EUR' ? '(€)' : '($)'}
+              </label>
               <Input
                 type="number"
                 min="0"
@@ -352,6 +361,11 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
                 value={fees}
                 onChange={(e) => setFees(e.target.value)}
               />
+              {currency === 'USD' && parseFloat(fees) > 0 && fxRate && (
+                <p className="text-xs text-muted-foreground">
+                  ≈ €{eurFees.toFixed(2)}
+                </p>
+              )}
             </div>
           </div>
 
