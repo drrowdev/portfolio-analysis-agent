@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+/* Dark financial dashboard theme */
+@theme {
+  --color-background: #0a0e17;
+  --color-foreground: #e2e8f0;
+  --color-card: #111827;
+  --color-card-foreground: #e2e8f0;
+  --color-popover: #1e293b;
+  --color-popover-foreground: #e2e8f0;
+  --color-primary: #10b981;
+  --color-primary-foreground: #022c22;
+  --color-secondary: #1e293b;
+  --color-secondary-foreground: #e2e8f0;
+  --color-muted: #1e293b;
+  --color-muted-foreground: #94a3b8;
+  --color-accent: #1e293b;
+  --color-accent-foreground: #e2e8f0;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fef2f2;
+  --color-border: #1e293b;
+  --color-input: #334155;
+  --color-ring: #10b981;
+  --color-gain: #10b981;
+  --color-loss: #ef4444;
+  --radius: 0.5rem;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar styling for financial dashboard */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-input);
+}
+
+/* Chat markdown styling */
+.chat-markdown p {
+  margin: 0.25em 0;
+  line-height: 1.5;
+}
+.chat-markdown p:first-child {
+  margin-top: 0;
+}
+.chat-markdown p:last-child {
+  margin-bottom: 0;
+}
+.chat-markdown ul, .chat-markdown ol {
+  margin: 0.25em 0;
+  padding-left: 1.25em;
+}
+.chat-markdown li {
+  margin: 0.1em 0;
+}
+.chat-markdown strong {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.chat-markdown code {
+  background: var(--color-background);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.chat-markdown pre {
+  background: var(--color-background);
+  padding: 0.5em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.chat-markdown pre code {
+  background: none;
+  padding: 0;
+}
+.chat-markdown h1, .chat-markdown h2, .chat-markdown h3 {
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+}
+.chat-markdown h3 { font-size: 0.95em; }
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+.chat-markdown th, .chat-markdown td {
+  border: 1px solid var(--color-border);
+  padding: 0.25em 0.5em;
+}
+.chat-markdown th {
+  background: var(--color-background);
+  font-weight: 600;
+}

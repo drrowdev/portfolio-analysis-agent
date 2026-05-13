@@ -1,0 +1,6 @@
+__pycache__
+*.pyc
+*.db
+.env
+portfolio_agent.db
+alembic/versions/__pycache__

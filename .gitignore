@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+azure-resources.txt
+
+# Local operational scripts (may contain user-specific symbol seed data, etc.)
+backend/scripts/seed_symbols.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+
+# Database
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.sw?
