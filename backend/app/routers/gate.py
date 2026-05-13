@@ -1,8 +1,10 @@
-"""Simple cookie-based access gate.
+"""Simple shared-password access gate.
 
 A single shared password protects all API routes. On correct submission,
-a long-lived secure cookie is set. Subsequent requests are validated by
-checking the cookie value matches a HMAC of the secret.
+the backend returns an HMAC-derived token. Clients can present the token
+either as a long-lived HttpOnly cookie (preferred — desktop) or as an
+`Authorization: Bearer <token>` header (required for browsers that block
+cross-site cookies, e.g. iOS Safari / Vivaldi on iOS, Firefox mobile).
 """
 
 import hashlib
@@ -31,13 +33,21 @@ def _compute_token() -> str:
 
 
 def is_authenticated(request: Request) -> bool:
-    """Check if the request has a valid session cookie."""
+    """Check if the request has a valid session token via cookie OR Authorization header."""
     if not settings.APP_SECRET:
         return True  # No secret configured — gate disabled
+    expected = _compute_token()
+    # Cookie path (desktop / same-site)
     cookie = request.cookies.get(COOKIE_NAME)
-    if not cookie:
-        return False
-    return secrets.compare_digest(cookie, _compute_token())
+    if cookie and secrets.compare_digest(cookie, expected):
+        return True
+    # Bearer-token path (mobile / cross-site cookie blocked)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):].strip()
+        if token and secrets.compare_digest(token, expected):
+            return True
+    return False
 
 
 class LoginRequest(BaseModel):
@@ -64,7 +74,10 @@ async def login(body: LoginRequest, response: Response) -> dict:
         secure=True,
         samesite="none",
     )
-    return {"status": "ok"}
+    # Also return the token so clients on browsers that block cross-site
+    # cookies (iOS Safari, mobile Firefox with Total Cookie Protection)
+    # can store it client-side and present it as a Bearer header.
+    return {"status": "ok", "token": token}
 
 
 @router.get("/check")

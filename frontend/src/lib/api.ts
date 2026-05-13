@@ -1,6 +1,32 @@
 import { coerceNumbers } from './utils';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api/v1';
+const TOKEN_STORAGE_KEY = 'paa_token';
+
+function storedToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredToken(token: string | null): void {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // ignore — storage may be unavailable
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = storedToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
@@ -8,6 +34,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders(),
       ...options?.headers,
     },
     ...options,
@@ -27,6 +54,7 @@ async function uploadFormData<T>(endpoint: string, formData: FormData): Promise<
   const res = await fetch(url, {
     method: 'POST',
     credentials: 'include',
+    headers: { ...authHeaders() },
     body: formData,
   });
   if (!res.ok) {
@@ -63,11 +91,18 @@ export const api = {
 
   checkAuth: () => request<{ authenticated: boolean }>('/auth/check'),
 
-  login: (password: string) =>
-    request<{ status: string }>('/auth/login', {
+  login: async (password: string) => {
+    const res = await request<{ status: string; token?: string }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ password }),
-    }),
+    });
+    if (res.token) {
+      setStoredToken(res.token);
+    }
+    return res;
+  },
+
+  clearAuth: () => setStoredToken(null),
 
   fetchPortfolioSummary: () =>
     request<unknown>('/portfolio/summary'),
@@ -205,7 +240,7 @@ export const api = {
     const res = await fetch(url, {
       method: 'POST',
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ message, history }),
     });
     if (!res.ok) {
