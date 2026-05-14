@@ -19,16 +19,17 @@ function ExtendedHoursTag({ state, changePct, privacyMode, mask }: {
   const isPre = state === 'PRE';
   const label = isPre ? 'Pre-market' : 'After-hours';
   const Icon = isPre ? Sunrise : Moon;
-  // Subtle, muted color — clearly secondary to the regular-session number above.
-  const color = changePct >= 0 ? 'text-emerald-400/70' : 'text-red-400/70';
+  const color = changePct >= 0 ? 'text-emerald-500' : 'text-red-500';
 
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[10px] leading-tight ${color}`}
+      className="inline-flex items-center gap-1 text-xs leading-tight"
       title={label}
     >
-      <Icon className="h-2.5 w-2.5" />
-      {privacyMode ? mask(0) : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`}
+      <Icon className="h-3.5 w-3.5 text-blue-400" />
+      <span className={color}>
+        {privacyMode ? mask(0) : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`}
+      </span>
     </span>
   );
 }
@@ -63,11 +64,23 @@ function HoldingsRows({ holdings, accountNames, privacyMode, mask, isCrypto }: {
           <TableCell className="text-right font-mono">
             {privacyMode ? mask(0) : h.current_price_eur != null ? formatCurrency(h.current_price_eur) : '—'}
           </TableCell>
-          <TableCell className={`text-right font-mono ${privacyMode ? '' : h.price_change_pct != null ? (h.price_change_pct >= 0 ? 'text-emerald-500' : 'text-red-500') : 'text-muted-foreground'}`}>
-            <div className="flex flex-col items-end leading-tight">
-              <span>
-                {privacyMode ? mask(0) : h.price_change_pct != null ? `${h.price_change_pct >= 0 ? '+' : ''}${h.price_change_pct.toFixed(2)}%` : '—'}
-              </span>
+          <TableCell className="text-right font-mono">
+            <div className="flex flex-col items-end gap-0.5 leading-tight">
+              {privacyMode ? (
+                <span className="text-muted-foreground">{mask(0)}</span>
+              ) : h.price_change_pct != null ? (
+                <span
+                  className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${
+                    h.price_change_pct >= 0
+                      ? 'bg-emerald-500/15 text-emerald-400'
+                      : 'bg-red-500/15 text-red-400'
+                  }`}
+                >
+                  {h.price_change_pct >= 0 ? '+' : ''}{h.price_change_pct.toFixed(2)}%
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
               <ExtendedHoursTag state={h.market_state} changePct={h.extended_hours_change_pct} privacyMode={privacyMode} mask={mask} />
             </div>
           </TableCell>
