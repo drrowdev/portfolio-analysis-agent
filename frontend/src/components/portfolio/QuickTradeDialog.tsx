@@ -42,6 +42,8 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
   const [currency, setCurrency] = useState<'EUR' | 'USD'>('EUR');
   const [tradeDate, setTradeDate] = useState(new Date().toISOString().slice(0, 10));
   const [fees, setFees] = useState('');
+  const [feesCurrency, setFeesCurrency] = useState<'EUR' | 'USD'>('EUR');
+  const [feesCurrencyTouched, setFeesCurrencyTouched] = useState(false);
   const [nameLooking, setNameLooking] = useState(false);
   const [taxDialogOpen, setTaxDialogOpen] = useState(false);
   const [taxSellParams, setTaxSellParams] = useState<{
@@ -55,7 +57,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
   const { data: fxData } = useQuery({
     queryKey: ['fx', 'eurusd'],
     queryFn: api.getFxRate,
-    enabled: currency === 'USD',
+    enabled: currency === 'USD' || feesCurrency === 'USD',
     staleTime: 5 * 60 * 1000,
   });
 
@@ -98,10 +100,22 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
 
   const eurFees = useMemo(() => {
     const f = parseFloat(fees) || 0;
-    if (currency === 'EUR') return f;
+    if (feesCurrency === 'EUR') return f;
     if (!fxRate) return 0;
     return f / fxRate;
-  }, [currency, fees, fxRate]);
+  }, [feesCurrency, fees, fxRate]);
+
+  // When the user changes the trade currency, default fees currency to match
+  // (until the user explicitly picks a fees currency themselves).
+  const handleCurrencyChange = useCallback((next: 'EUR' | 'USD') => {
+    setCurrency(next);
+    if (!feesCurrencyTouched) setFeesCurrency(next);
+  }, [feesCurrencyTouched]);
+
+  const handleFeesCurrencyChange = useCallback((next: 'EUR' | 'USD') => {
+    setFeesCurrency(next);
+    setFeesCurrencyTouched(true);
+  }, []);
 
   const mutation = useMutation({
     mutationFn: api.quickTrade,
@@ -142,6 +156,8 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
     setCurrency('EUR');
     setTradeDate(new Date().toISOString().slice(0, 10));
     setFees('');
+    setFeesCurrency('EUR');
+    setFeesCurrencyTouched(false);
     onOpenChange(false);
   }
 
@@ -175,7 +191,8 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
   }
 
   const isValid = accountId && symbol && name && parseFloat(quantity) > 0 && parseFloat(price) > 0
-    && (currency === 'EUR' || fxRate !== null);
+    && (currency === 'EUR' || fxRate !== null)
+    && (feesCurrency === 'EUR' || !parseFloat(fees) || fxRate !== null);
 
   return (
     <>
@@ -306,7 +323,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-transparent text-muted-foreground hover:text-foreground'
                     }`}
-                    onClick={() => setCurrency('EUR')}
+                    onClick={() => handleCurrencyChange('EUR')}
                   >
                     €
                   </button>
@@ -317,7 +334,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-transparent text-muted-foreground hover:text-foreground'
                     }`}
-                    onClick={() => setCurrency('USD')}
+                    onClick={() => handleCurrencyChange('USD')}
                   >
                     $
                   </button>
@@ -350,9 +367,35 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">
-                Commission {currency === 'EUR' ? '(€)' : '($)'}
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Commission {feesCurrency === 'EUR' ? '(€)' : '($)'}
+                </label>
+                <div className="flex rounded-md border overflow-hidden">
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 text-xs font-medium transition-colors ${
+                      feesCurrency === 'EUR'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                    onClick={() => handleFeesCurrencyChange('EUR')}
+                  >
+                    €
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-2 py-0.5 text-xs font-medium transition-colors ${
+                      feesCurrency === 'USD'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                    onClick={() => handleFeesCurrencyChange('USD')}
+                  >
+                    $
+                  </button>
+                </div>
+              </div>
               <Input
                 type="number"
                 min="0"
@@ -361,7 +404,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
                 value={fees}
                 onChange={(e) => setFees(e.target.value)}
               />
-              {currency === 'USD' && parseFloat(fees) > 0 && fxRate && (
+              {feesCurrency === 'USD' && parseFloat(fees) > 0 && fxRate && (
                 <p className="text-xs text-muted-foreground">
                   ≈ €{eurFees.toFixed(2)}
                 </p>
