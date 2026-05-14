@@ -17,13 +17,17 @@ function ExtendedHoursTag({ state, changePct, privacyMode, mask }: {
   }
 
   const isPre = state === 'PRE';
-  const label = isPre ? 'Pre' : 'Post';
+  const label = isPre ? 'Pre-market' : 'After-hours';
   const Icon = isPre ? Sunrise : Moon;
-  const color = changePct >= 0 ? 'text-emerald-400' : 'text-red-400';
+  // Subtle, muted color — clearly secondary to the regular-session number above.
+  const color = changePct >= 0 ? 'text-emerald-400/70' : 'text-red-400/70';
 
   return (
-    <span className={`inline-flex items-center gap-0.5 text-[11px] ${color} ml-1`} title={`${label}-market`}>
-      <Icon className="h-3 w-3" />
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] leading-tight ${color}`}
+      title={label}
+    >
+      <Icon className="h-2.5 w-2.5" />
       {privacyMode ? mask(0) : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`}
     </span>
   );
@@ -60,10 +64,12 @@ function HoldingsRows({ holdings, accountNames, privacyMode, mask, isCrypto }: {
             {privacyMode ? mask(0) : h.current_price_eur != null ? formatCurrency(h.current_price_eur) : '—'}
           </TableCell>
           <TableCell className={`text-right font-mono ${privacyMode ? '' : h.price_change_pct != null ? (h.price_change_pct >= 0 ? 'text-emerald-500' : 'text-red-500') : 'text-muted-foreground'}`}>
-            <span>
-              {privacyMode ? mask(0) : h.price_change_pct != null ? `${h.price_change_pct >= 0 ? '+' : ''}${h.price_change_pct.toFixed(2)}%` : '—'}
-            </span>
-            <ExtendedHoursTag state={h.market_state} changePct={h.extended_hours_change_pct} privacyMode={privacyMode} mask={mask} />
+            <div className="flex flex-col items-end leading-tight">
+              <span>
+                {privacyMode ? mask(0) : h.price_change_pct != null ? `${h.price_change_pct >= 0 ? '+' : ''}${h.price_change_pct.toFixed(2)}%` : '—'}
+              </span>
+              <ExtendedHoursTag state={h.market_state} changePct={h.extended_hours_change_pct} privacyMode={privacyMode} mask={mask} />
+            </div>
           </TableCell>
           <TableCell className="text-right font-mono font-medium">
             {privacyMode ? mask(0) : h.current_value_eur != null ? formatCurrency(h.current_value_eur) : '—'}
