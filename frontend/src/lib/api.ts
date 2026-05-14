@@ -158,7 +158,7 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
 
-  getFxRate: () => request<{ rate: number }>('/fx/eurusd'),
+  getFxRate: (date?: string) => request<{ rate: number }>(`/fx/eurusd${date ? `?date=${encodeURIComponent(date)}` : ''}`),
 
   listTransactions: (params?: {
     account_id?: string;

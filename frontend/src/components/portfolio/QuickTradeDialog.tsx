@@ -55,10 +55,10 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
   } | null>(null);
 
   const { data: fxData } = useQuery({
-    queryKey: ['fx', 'eurusd'],
-    queryFn: api.getFxRate,
-    enabled: currency === 'USD' || feesCurrency === 'USD',
-    staleTime: 5 * 60 * 1000,
+    queryKey: ['fx', 'eurusd', tradeDate],
+    queryFn: () => api.getFxRate(tradeDate),
+    enabled: (currency === 'USD' || feesCurrency === 'USD') && !!tradeDate,
+    staleTime: 24 * 60 * 60 * 1000,  // historical rates don't change
   });
 
   const fxRate = fxData?.rate ?? null;
@@ -350,7 +350,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
               />
               {currency === 'USD' && parseFloat(price) > 0 && fxRate && (
                 <p className="text-xs text-muted-foreground">
-                  ≈ €{eurPrice.toFixed(2)} (rate: 1 EUR = {fxRate.toFixed(4)} USD)
+                  ≈ €{eurPrice.toFixed(2)} (rate on {tradeDate}: 1 EUR = {fxRate.toFixed(4)} USD)
                 </p>
               )}
             </div>

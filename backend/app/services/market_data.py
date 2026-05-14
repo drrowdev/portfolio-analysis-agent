@@ -73,15 +73,34 @@ async def get_current_price(symbol: str) -> PriceInfo:
 
 
 async def get_fx_rate(pair: str, target_date: Optional[date] = None) -> Optional[Decimal]:
-    """Fetch the FX rate for a currency pair (e.g., 'EURUSD=X').
+    """Fetch the FX rate for a currency pair (e.g., 'EURUSD').
 
     If target_date is None, returns the latest rate.
+    Otherwise returns the close rate on the requested date, or the
+    most recent prior trading day's close if the date itself is not
+    a trading day (weekend/holiday).
     """
     ticker = yf.Ticker(f"{pair}=X")
-    hist = ticker.history(period="5d")
+    if target_date is None:
+        hist = ticker.history(period="5d")
+        if hist.empty:
+            return None
+        return Decimal(str(hist["Close"].iloc[-1]))
+
+    # Historical: fetch a window covering the target date, take the close
+    # at or before target_date. yfinance's `end` is exclusive, so add a day.
+    from datetime import timedelta
+    start = target_date - timedelta(days=7)
+    end = target_date + timedelta(days=1)
+    hist = ticker.history(start=str(start), end=str(end))
     if hist.empty:
         return None
-    return Decimal(str(hist["Close"].iloc[-1]))
+    # hist index is tz-aware DatetimeIndex; compare on date()
+    on_or_before = [(idx, row["Close"]) for idx, row in hist.iterrows() if idx.date() <= target_date]
+    if not on_or_before:
+        return None
+    _, close = on_or_before[-1]
+    return Decimal(str(close))
 
 
 async def get_historical_prices(

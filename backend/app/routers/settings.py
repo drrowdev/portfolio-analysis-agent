@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date as date_type
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +48,16 @@ async def upsert_setting(key: str, body: SettingValue, db: AsyncSession = Depend
 
 
 @fx_router.get("/eurusd", response_model=FxRateResponse)
-async def fx_eurusd():
-    rate = await get_fx_rate("EURUSD")
+async def fx_eurusd(
+    target_date: date_type | None = Query(default=None, alias="date"),
+):
+    """Return the EUR/USD rate (USD per 1 EUR).
+
+    With ?date=YYYY-MM-DD, returns the close rate for that date (or the
+    most recent prior trading day if the date is a weekend/holiday).
+    Without a date, returns the latest available rate.
+    """
+    rate = await get_fx_rate("EURUSD", target_date=target_date)
     if rate is None:
         raise HTTPException(status_code=502, detail="Could not fetch EUR/USD rate")
     return FxRateResponse(rate=float(rate))
