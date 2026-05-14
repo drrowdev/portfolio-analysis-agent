@@ -10,8 +10,8 @@ import { cn } from '@/lib/utils';
 
 function formatTimestamp(dateStr: string): string {
   const date = new Date(dateStr);
-  return date.toLocaleString(undefined, {
-    month: 'short',
+  return date.toLocaleString('fi-FI', {
+    month: 'numeric',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',

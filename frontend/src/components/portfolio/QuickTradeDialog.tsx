@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAccounts } from '@/hooks/useAccounts';
 import { useHoldings } from '@/hooks/usePortfolio';
 import { api } from '@/lib/api';
+import { formatDate } from '@/lib/utils';
 import { toast } from '@/hooks/useToast';
 import {
   Dialog,
@@ -350,7 +351,7 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
               />
               {currency === 'USD' && parseFloat(price) > 0 && fxRate && (
                 <p className="text-xs text-muted-foreground">
-                  ≈ €{eurPrice.toFixed(2)} (rate on {tradeDate}: 1 EUR = {fxRate.toFixed(4)} USD)
+                  ≈ €{eurPrice.toFixed(2)} (rate on {formatDate(tradeDate)}: 1 EUR = {fxRate.toFixed(4)} USD)
                 </p>
               )}
             </div>
@@ -418,14 +419,14 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
               <span className="text-xs text-muted-foreground">Total</span>
               {currency === 'EUR' ? (
                 <p className="text-lg font-semibold">
-                  €{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  €{total.toLocaleString('fi-FI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </p>
               ) : (
                 <p className="text-lg font-semibold">
-                  ${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ${total.toLocaleString('fi-FI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   {fxRate && (
                     <span className="text-sm font-normal text-muted-foreground">
-                      {' '}≈ €{eurTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      {' '}≈ €{eurTotal.toLocaleString('fi-FI', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                   )}
                 </p>

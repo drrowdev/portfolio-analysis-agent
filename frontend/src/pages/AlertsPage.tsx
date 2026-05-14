@@ -56,7 +56,7 @@ function relativeTime(dateStr: string): string {
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays < 30) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString('fi-FI');
 }
 
 export function AlertsPage() {

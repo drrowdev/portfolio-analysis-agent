@@ -46,6 +46,24 @@ export function formatNumber(value: number | string, decimals = 2): string {
   }).format(num);
 }
 
+/** Format a date string in Finnish locale (DD.MM.YYYY by default).
+ *
+ * Accepts an ISO string ("2026-05-13") or any value Date can parse. Pass a
+ * `style` of `short` for "13.5.2026", `medium` for "13. toukokuuta 2026",
+ * or override entirely with `options`.
+ */
+export function formatDate(
+  dateString: string | Date,
+  options: Intl.DateTimeFormatOptions | 'short' | 'medium' | 'long' = 'short',
+): string {
+  const date = typeof dateString === 'string' ? new Date(dateString) : dateString;
+  if (Number.isNaN(date.getTime())) return '';
+  if (typeof options === 'string') {
+    return new Intl.DateTimeFormat('fi-FI', { dateStyle: options }).format(date);
+  }
+  return new Intl.DateTimeFormat('fi-FI', options).format(date);
+}
+
 /** Format a date string as a human-friendly relative time. */
 export function formatRelativeDate(dateString: string): string {
   const date = new Date(dateString);
@@ -62,5 +80,5 @@ export function formatRelativeDate(dateString: string): string {
   if (diffDays === 1) return 'Yesterday';
   if (diffDays < 7) return `${diffDays} days ago`;
 
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return formatDate(date, { day: 'numeric', month: 'numeric' });
 }

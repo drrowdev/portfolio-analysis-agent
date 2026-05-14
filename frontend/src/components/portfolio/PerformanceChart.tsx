@@ -25,11 +25,12 @@ const PERIOD_LABELS: Record<string, string> = {
 
 function formatDate(dateStr: string, period: string): string {
   const d = new Date(dateStr);
-  const month = d.toLocaleString('en-US', { month: 'short' });
   if (['1m', '3m'].includes(period)) {
-    return `${month} ${d.getDate()}`;
+    // Day + month, fi-FI numeric (e.g. "13.5.")
+    return d.toLocaleDateString('fi-FI', { day: 'numeric', month: 'numeric' });
   }
-  return `${month} ${d.getFullYear()}`;
+  // Month + year for longer ranges (e.g. "5/2026")
+  return d.toLocaleDateString('fi-FI', { month: 'numeric', year: 'numeric' });
 }
 
 interface CustomTooltipProps {
@@ -42,9 +43,9 @@ interface CustomTooltipProps {
 function CustomTooltip({ active, payload, label, privacyMode }: CustomTooltipProps) {
   if (!active || !payload || !label) return null;
   const d = new Date(label);
-  const formatted = d.toLocaleDateString('en-US', {
-    month: 'short',
+  const formatted = d.toLocaleDateString('fi-FI', {
     day: 'numeric',
+    month: 'numeric',
     year: 'numeric',
   });
   return (
