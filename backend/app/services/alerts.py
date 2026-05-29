@@ -12,6 +12,16 @@ from app.models.alert import Alert, AlertSeverity, AlertStatus, AlertType
 
 logger = logging.getLogger(__name__)
 
+# alerts.title column is VARCHAR(500) in the DB schema. Keep this in sync
+# if you ever change the model.
+ALERT_TITLE_MAX = 500
+
+
+def _truncate(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"
+
 
 async def create_alert(
     db: AsyncSession,
@@ -24,9 +34,10 @@ async def create_alert(
     notify: bool = True,
 ) -> Alert:
     """Create an alert and optionally push via ntfy.sh."""
+    safe_title = _truncate(title or "", ALERT_TITLE_MAX)
     alert = Alert(
         alert_type=alert_type,
-        title=title,
+        title=safe_title,
         message=message,
         severity=severity,
         status=AlertStatus.new,
@@ -38,7 +49,7 @@ async def create_alert(
     await db.refresh(alert)
 
     if notify and settings.NTFY_TOPIC:
-        await push_ntfy(title, message, severity)
+        await push_ntfy(safe_title, message, severity)
 
     return alert
 

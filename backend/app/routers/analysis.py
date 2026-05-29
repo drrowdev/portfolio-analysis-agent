@@ -1,5 +1,7 @@
 """Portfolio analysis endpoints — Claude-powered insights."""
 
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +10,8 @@ from app.database import get_db
 from app.models.alert import AnalysisHistory, AnalysisType
 from app.services import alerts as alerts_service
 from app.services import analysis as analysis_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -37,7 +41,13 @@ async def get_latest_daily_summary(db: AsyncSession = Depends(get_db)):
 async def trigger_daily_summary(db: AsyncSession = Depends(get_db)):
     """Trigger a daily portfolio analysis."""
     result = await analysis_service.daily_summary(db)
-    await alerts_service.generate_alerts_from_analysis(db, result)
+    await db.commit()
+    try:
+        await alerts_service.generate_alerts_from_analysis(db, result)
+        await db.commit()
+    except Exception:
+        logger.exception("alert generation failed after daily_summary; analysis is saved")
+        await db.rollback()
     return result
 
 
@@ -45,7 +55,13 @@ async def trigger_daily_summary(db: AsyncSession = Depends(get_db)):
 async def trigger_rebalance(db: AsyncSession = Depends(get_db)):
     """Get rebalancing recommendations."""
     result = await analysis_service.rebalance_recommendation(db)
-    await alerts_service.generate_alerts_from_analysis(db, result)
+    await db.commit()
+    try:
+        await alerts_service.generate_alerts_from_analysis(db, result)
+        await db.commit()
+    except Exception:
+        logger.exception("alert generation failed after rebalance; analysis is saved")
+        await db.rollback()
     return result
 
 
@@ -53,7 +69,13 @@ async def trigger_rebalance(db: AsyncSession = Depends(get_db)):
 async def trigger_tax_analysis(db: AsyncSession = Depends(get_db)):
     """Get tax optimization analysis."""
     result = await analysis_service.tax_optimization_analysis(db)
-    await alerts_service.generate_alerts_from_analysis(db, result)
+    await db.commit()
+    try:
+        await alerts_service.generate_alerts_from_analysis(db, result)
+        await db.commit()
+    except Exception:
+        logger.exception("alert generation failed after tax_optimization; analysis is saved")
+        await db.rollback()
     return result
 
 
@@ -61,7 +83,13 @@ async def trigger_tax_analysis(db: AsyncSession = Depends(get_db)):
 async def trigger_news_impact(db: AsyncSession = Depends(get_db)):
     """Analyze recent news impact on portfolio."""
     result = await analysis_service.news_impact_analysis(db)
-    await alerts_service.generate_alerts_from_analysis(db, result)
+    await db.commit()
+    try:
+        await alerts_service.generate_alerts_from_analysis(db, result)
+        await db.commit()
+    except Exception:
+        logger.exception("alert generation failed after news_impact; analysis is saved")
+        await db.rollback()
     return result
 
 
