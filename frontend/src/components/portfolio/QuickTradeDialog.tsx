@@ -172,6 +172,20 @@ export function QuickTradeDialog({ open, onOpenChange }: QuickTradeDialogProps) 
     e.preventDefault();
     if (!accountId || !symbol || !name || !quantity || !price) return;
 
+    // Guard against the Enter-key path submitting a USD trade before the
+    // sale-day EUR/USD rate has loaded — otherwise the USD price would be
+    // treated as EUR (priceEur fallback below), inflating the tax basis.
+    const needsFx =
+      currency === 'USD' || (feesCurrency === 'USD' && parseFloat(fees) > 0);
+    if (needsFx && !fxRate) {
+      toast({
+        title: 'Waiting for exchange rate',
+        description: `Fetching the EUR/USD rate for ${tradeDate}. Try again in a moment.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const priceEur = currency === 'USD' && fxRate
       ? parseFloat(price) / fxRate
       : parseFloat(price);
