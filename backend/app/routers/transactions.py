@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.transaction import TransactionCreate, TransactionRead
+from app.services import fx as fx_convert
 from app.services import tax as tax_math
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -542,81 +543,14 @@ async def fix_fx_rates(
 
     Fetches actual EUR/USD rates from frankfurter.app (ECB reference rates) for each
     transaction date and recalculates price_eur and total_eur accordingly.
+
+    This is the manual re-run of the same conversion that now runs automatically
+    on import (see ``app.services.fx`` and the Fidelity upload route).
     """
-    import httpx
-    import asyncio
-    from decimal import Decimal as D
+    from fastapi import HTTPException
 
-    # Get all transactions for this symbol
-    stmt = (
-        select(Transaction)
-        .where(Transaction.symbol == symbol)
-        .where(Transaction.currency == "USD")
-        .order_by(Transaction.date.asc())
-    )
-    result = await db.execute(stmt)
-    transactions = list(result.scalars().all())
-
-    if not transactions:
-        from fastapi import HTTPException
+    summary = await fx_convert.convert_symbol_to_eur(db, symbol)
+    if summary["total_transactions"] == 0:
         raise HTTPException(status_code=404, detail=f"No USD transactions found for {symbol}")
-
-    # Get unique dates
-    unique_dates = sorted(set(str(tx.date) for tx in transactions))
-
-    # Fetch historical rates from ECB via frankfurter.app
-    fx_rates: dict[str, float] = {}
-    async with httpx.AsyncClient(timeout=30) as client:
-        for date_str in unique_dates:
-            url = f"https://api.frankfurter.app/{date_str}?from=USD&to=EUR"
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                usd_to_eur = data["rates"]["EUR"]
-                eurusd = round(1.0 / usd_to_eur, 6)  # EUR/USD (1 EUR = X USD)
-                fx_rates[date_str] = eurusd
-            else:
-                # API returns closest business day for weekends/holidays
-                fx_rates[date_str] = None
-            await asyncio.sleep(0.2)
-
-    # Update each transaction
-    updated = 0
-    old_total_buy_eur = D("0")
-    new_total_buy_eur = D("0")
-
-    for tx in transactions:
-        date_str = str(tx.date)
-        rate = fx_rates.get(date_str)
-        if rate is None:
-            continue
-
-        new_eurusd = D(str(rate))
-        price_native = tx.price_native or D("0")
-        total_native = tx.total_native or D("0")
-
-        new_price_eur = (price_native / new_eurusd).quantize(D("0.0001"))
-        new_total_eur = (total_native / new_eurusd).quantize(D("0.01"))
-
-        if tx.transaction_type.value in ("buy", "espp_purchase"):
-            old_total_buy_eur += tx.total_eur or D("0")
-            new_total_buy_eur += new_total_eur
-
-        tx.fx_rate = new_eurusd
-        tx.price_eur = new_price_eur
-        tx.total_eur = new_total_eur
-        updated += 1
-
     await db.commit()
-
-    return {
-        "symbol": symbol,
-        "transactions_updated": updated,
-        "total_transactions": len(transactions),
-        "dates_fetched": len(fx_rates),
-        "dates_failed": sum(1 for v in fx_rates.values() if v is None),
-        "old_total_buy_eur": float(old_total_buy_eur),
-        "new_total_buy_eur": float(new_total_buy_eur),
-        "cost_basis_change_eur": float(new_total_buy_eur - old_total_buy_eur),
-        "sample_rates": {k: v for k, v in list(fx_rates.items())[:5]},
-    }
+    return summary
