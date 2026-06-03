@@ -25,6 +25,7 @@ Implements the Finnish rules:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 
 ZERO = Decimal("0")
@@ -34,6 +35,25 @@ BRACKET_THRESHOLD = Decimal("30000")
 LOW_TAX_RATE = Decimal("0.30")
 HIGH_TAX_RATE = Decimal("0.34")
 _EPS = Decimal("0.005")
+
+
+def ten_year_anniversary(d: date) -> date:
+    """Calendar date on which a lot bought on ``d`` has been held 10 years.
+
+    Uses calendar arithmetic (not a 365.25-day approximation) so the
+    20 %/40 % deemed-cost (hankintameno-olettama) boundary is classified
+    exactly. A lot bought on 2014-03-15 reaches 10 years of ownership on
+    2024-03-15. Feb 29 lots fall back to Feb 28 in a non-leap target year.
+    """
+    try:
+        return d.replace(year=d.year + 10)
+    except ValueError:
+        return d.replace(year=d.year + 10, day=28)
+
+
+def held_at_least_10_years(purchase_date: date, sell_date: date) -> bool:
+    """True if the lot qualifies for the 40 % deemed-cost rate (>=10y held)."""
+    return sell_date >= ten_year_anniversary(purchase_date)
 
 
 def deemed_rate(over_10_years: bool) -> Decimal:

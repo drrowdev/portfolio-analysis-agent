@@ -428,7 +428,9 @@ async def compute_tax_calculation(
         lot_qty, lot_price, lot_date = lots[0]
         holding_days = (sell_date - lot_date).days
         holding_years = holding_days / 365.25
-        over_10 = holding_years >= 10
+        # ≥10-year boundary is calendar-based (TVL hankintameno-olettama):
+        # 40 % applies once the sale date reaches the 10-year anniversary.
+        over_10 = tax_math.held_at_least_10_years(lot_date, sell_date)
 
         take = lot_qty if lot_qty <= remaining_to_sell else remaining_to_sell
         lot_cost = take * lot_price
@@ -472,8 +474,18 @@ async def compute_tax_calculation(
         f"Edullisin menetelmä tälle myynnille: {method_label}.",
         "Pääomatulovero: 30 % enintään 30 000 € pääomatuloista vuodessa, 34 % "
         "ylittävältä osalta. Tämä laskelma huomioi vain tämän myynnin — koko "
-        "vuoden pääomatulot voivat muuttaa veroprosenttia.",
-        "Tee ennakkoveroilmoitus OmaVerossa 2 kuukauden kuluessa myynnistä.",
+        "vuoden muut pääomatulot (esim. osingot, vuokratulot, muut "
+        "luovutusvoitot) ja vähennyskelpoiset tappiot voivat muuttaa "
+        "todellista veroprosenttia.",
+        "Pienten luovutusten verovapaus (TVL 48.6 §): jos verovuoden KAIKKIEN "
+        "omaisuuden luovutusten yhteenlasketut myyntihinnat ovat enintään "
+        "1 000 €, luovutusvoitto on verovapaa. Tämä laskelma ei näe muita "
+        "vuoden myyntejä, joten tarkista raja itse.",
+        "Maksa lisäennakko OmaVerossa: verovuoden myyntien verot voi maksaa "
+        "ilman korkoseuraamuksia seuraavan vuoden tammikuun loppuun mennessä "
+        "(esim. myynti 2026 → maksa viimeistään 31.1.2027). Myöhemmin "
+        "maksettuna kertyy huojennettua viivästyskorkoa. Lisäennakon "
+        "vähimmäismäärä on 170 €.",
     ]
     if result.shortfall_qty > 0:
         notes.insert(
