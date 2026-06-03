@@ -1,3 +1,4 @@
+import logging
 import uuid
 from decimal import Decimal
 
@@ -9,9 +10,12 @@ from app.database import get_db
 from app.models.account import Account, AccountType, TaxTreatment
 from app.models.holding import Holding
 from app.models.transaction import Transaction, TransactionType
+from app.services import fx as fx_convert
 from app.services.csv_parser import parse_fidelity_pdf, parse_nordnet_csv
 
 router = APIRouter(prefix="/upload", tags=["upload"])
+
+logger = logging.getLogger(__name__)
 
 TAX_TREATMENT_MAP = {
     AccountType.arvo_osuustili: TaxTreatment.standard,
@@ -256,10 +260,27 @@ async def upload_fidelity_pdf(
 
     await db.flush()
 
+    # Auto-convert USD figures to EUR using historical ECB rates so the data is
+    # tax-ready immediately. Best-effort: if the FX API is unreachable the import
+    # still succeeds and the user can re-run POST /transactions/fix-fx-rates/{symbol}.
+    fx_conversion: dict | None = None
+    fx_symbols = sorted({ft.symbol for ft in result.transactions if ft.symbol})
+    try:
+        converted = [await fx_convert.convert_symbol_to_eur(db, sym) for sym in fx_symbols]
+        await db.flush()
+        fx_conversion = {
+            "ok": True,
+            "symbols": [c for c in converted if c["total_transactions"]],
+        }
+    except Exception as exc:  # noqa: BLE001 - import must not fail on FX outage
+        logger.warning("Auto FX conversion failed after Fidelity import: %s", exc)
+        fx_conversion = {"ok": False, "error": str(exc)}
+
     return {
         "account_id": str(account.id),
         "holdings_created": holdings_created,
         "transactions_imported": transactions_imported,
+        "fx_conversion": fx_conversion,
         "summary": {
             "participant_number": result.participant_number,
             "period": f"{result.period_start} to {result.period_end}",
