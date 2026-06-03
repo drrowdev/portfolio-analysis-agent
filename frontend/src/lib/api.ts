@@ -237,6 +237,24 @@ export const api = {
       `/transactions/tax-calculations/by-transaction/${transactionId}`
     ),
 
+  getTaxCalculationsSummary: (year?: number) =>
+    request<{
+      year: number;
+      calculation_count: number;
+      net_gain_eur: number;
+      gains_eur: number;
+      losses_eur: number;
+      total_proceeds_eur: number;
+      bracket_threshold_eur: number;
+      remaining_at_30pct_eur: number;
+      amount_over_threshold_eur: number;
+      estimated_tax_eur: number;
+      effective_rate: number;
+      low_rate: number;
+      high_rate: number;
+      sales: { id: string; symbol: string; sell_date: string; gain_eur: number; proceeds_eur: number }[];
+    }>(`/transactions/tax-calculations/summary${year ? `?year=${year}` : ''}`),
+
   getTaxCalculationPdfUrl: (id: string) =>
     `${API_BASE}/transactions/tax-calculations/${id}/pdf`,
 

@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatCurrency } from '@/lib/utils';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import { TaxCalculationDialog } from '@/components/portfolio/TaxCalculationDialog';
+import { CapitalGainsTracker } from '@/components/portfolio/CapitalGainsTracker';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -114,6 +115,7 @@ export function TransactionsPage() {
     mutationFn: (id: string) => api.deleteTaxCalculation(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
       toast({ title: 'Tax calculation deleted' });
     },
     onError: (e: unknown) =>
@@ -128,6 +130,7 @@ export function TransactionsPage() {
     mutationFn: () => api.deleteAllTaxCalculations(),
     onSuccess: (res: { deleted: number }) => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
       toast({ title: `Deleted ${res.deleted} saved tax calculation${res.deleted !== 1 ? 's' : ''}` });
     },
     onError: (e: unknown) =>
@@ -216,6 +219,8 @@ export function TransactionsPage() {
           </Button>
         </div>
       </div>
+
+      <CapitalGainsTracker />
 
       {showFilters && (
         <Card>

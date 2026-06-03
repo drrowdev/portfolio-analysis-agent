@@ -1,0 +1,135 @@
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { usePrivacy } from '@/contexts/PrivacyContext';
+import { api } from '@/lib/api';
+import { ChevronLeft, ChevronRight, Gauge, AlertTriangle } from 'lucide-react';
+
+function eur(value: number): string {
+  return new Intl.NumberFormat('fi-FI', {
+    style: 'currency',
+    currency: 'EUR',
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function eur2(value: number): string {
+  return new Intl.NumberFormat('fi-FI', { style: 'currency', currency: 'EUR' }).format(value);
+}
+
+export function CapitalGainsTracker() {
+  const { privacyMode } = usePrivacy();
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(currentYear);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['tax-calculations-summary', year],
+    queryFn: () => api.getTaxCalculationsSummary(year),
+  });
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Capital Gains vs €30k Bracket</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-[120px] w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const threshold = data?.bracket_threshold_eur ?? 30000;
+  const net = data?.net_gain_eur ?? 0;
+  const over = data?.amount_over_threshold_eur ?? 0;
+  const remaining = data?.remaining_at_30pct_eur ?? threshold;
+  const pct = Math.min(100, Math.max(0, (net / threshold) * 100));
+  const isOver = over > 0;
+  const mask = (v: string) => (privacyMode ? '•••••' : v);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-1.5">
+            <Gauge className="h-4 w-4 text-muted-foreground" />
+            Capital Gains vs €30k Bracket
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setYear((y) => y - 1)} className="p-0.5 rounded hover:bg-muted">
+              <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+            </button>
+            <span className="text-sm font-medium tabular-nums w-12 text-center">{year}</span>
+            <button
+              onClick={() => setYear((y) => Math.min(y + 1, currentYear))}
+              disabled={year >= currentYear}
+              className="p-0.5 rounded hover:bg-muted disabled:opacity-30"
+            >
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!data || data.calculation_count === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            No saved tax calculations in {year}
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {/* Net YTD gain */}
+            <div className="flex items-baseline justify-between">
+              <span className="text-2xl font-bold tabular-nums">{mask(eur2(net))}</span>
+              <span className="text-xs text-muted-foreground">of {eur(threshold)} at 30%</span>
+            </div>
+
+            {/* Progress bar */}
+            <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${isOver ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+
+            {/* Headroom / overflow message */}
+            {isOver ? (
+              <div className="flex items-start gap-1.5 text-sm text-amber-600 dark:text-amber-500">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>
+                  {mask(eur2(over))} over the €30k threshold — that portion is taxed at {Math.round((data.high_rate ?? 0.34) * 100)}%.
+                </span>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{mask(eur2(remaining))}</span> of headroom before the {Math.round((data.high_rate ?? 0.34) * 100)}% bracket.
+              </p>
+            )}
+
+            {/* Tax + breakdown */}
+            <div className="grid grid-cols-3 gap-2 text-sm border-t border-border pt-3">
+              <div>
+                <p className="text-muted-foreground text-xs">Gains</p>
+                <p className="font-medium text-emerald-500 tabular-nums">{mask(eur2(data.gains_eur))}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Losses</p>
+                <p className="font-medium text-red-500 tabular-nums">{mask(eur2(data.losses_eur))}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Est. tax</p>
+                <p className="font-medium tabular-nums">{mask(eur2(data.estimated_tax_eur))}</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              From {data.calculation_count} saved calculation{data.calculation_count !== 1 ? 's' : ''}. Dividends and other
+              capital income also count toward the €30k limit but are not included here.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

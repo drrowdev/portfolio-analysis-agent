@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
   Dialog,
@@ -88,6 +88,7 @@ function methodLabel(method: string, rate: string): string {
 
 export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalculationDialogProps) {
   const [savedId, setSavedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: taxCalc, isLoading, error } = useQuery<TaxCalculation>({
     queryKey: ['tax-calculation', sellParams],
@@ -121,6 +122,8 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
     },
     onSuccess: (data) => {
       setSavedId(data.id);
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
       toast({ title: 'Saved', description: 'Tax calculation stored successfully.' });
     },
     onError: (err) => {
