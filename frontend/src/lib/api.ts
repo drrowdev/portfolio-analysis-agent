@@ -45,7 +45,15 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     throw new Error(error.detail || `API error: ${res.status}`);
   }
 
-  const data = await res.json();
+  // 204 No Content (e.g. DELETE) or any empty body has nothing to parse.
+  if (res.status === 204) {
+    return undefined as T;
+  }
+  const text = await res.text();
+  if (!text) {
+    return undefined as T;
+  }
+  const data = JSON.parse(text);
   return coerceNumbers(data) as T;
 }
 
