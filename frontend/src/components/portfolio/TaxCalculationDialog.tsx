@@ -33,6 +33,8 @@ interface TaxLot {
   holding_days: number;
   holding_years: number;
   over_10_years: boolean;
+  applied_deemed_rate?: string;
+  method?: string;
 }
 
 interface TaxCalculation {
@@ -47,6 +49,7 @@ interface TaxCalculation {
     hankintameno_todellinen: number;
     hankintameno_olettama: number;
     hankintameno_olettama_rate: string;
+    hankintameno_kaytetty: number;
     recommended_method: string;
     luovutusvoitto: number;
     veron_maara: number;
@@ -60,6 +63,11 @@ interface TaxCalculation {
     better_method: string;
     tax_savings_eur: number;
   };
+  coverage?: {
+    quantity_sold: number;
+    quantity_covered: number;
+    shortfall_qty: number;
+  };
   lots_consumed: TaxLot[];
   notes: string[];
 }
@@ -70,6 +78,12 @@ function formatDate(iso: string) {
 
 function eur(n: number) {
   return n.toLocaleString('fi-FI', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function methodLabel(method: string, rate: string): string {
+  if (method === 'hankintameno_olettama') return `Olettama ${rate}`;
+  if (method === 'yhdistelma') return `Yhdistelmä ${rate}`;
+  return 'Todellinen';
 }
 
 export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalculationDialogProps) {
@@ -148,6 +162,16 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
 
         {taxCalc && (
           <div className="space-y-5">
+            {/* Coverage warning — sold more shares than recorded buy lots */}
+            {taxCalc.coverage && taxCalc.coverage.shortfall_qty > 0 && (
+              <div className="rounded-lg border-2 border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-300">
+                ⚠️ Vain {taxCalc.coverage.quantity_covered} / {taxCalc.coverage.quantity_sold} myydystä
+                osakkeesta löytyy ostotapahtumista. Puuttuvalle {taxCalc.coverage.shortfall_qty} osakkeelle
+                käytettiin 20 % hankintameno-olettamaa. Tarkista ostohistoria — todellinen hankintameno voi
+                pienentää veroa.
+              </div>
+            )}
+
             {/* Sale Summary */}
             <div className="rounded-lg border border-border bg-muted/30 p-4">
               <h3 className="text-sm font-semibold mb-2 text-muted-foreground uppercase tracking-wide">
@@ -186,16 +210,18 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
                   <div className="text-sm">
                     <span>Hankintameno</span>
                     <Badge variant="outline" className="ml-2 text-xs">
-                      {taxCalc.omavero.recommended_method === 'hankintameno_olettama'
-                        ? `Olettama ${taxCalc.omavero.hankintameno_olettama_rate}`
-                        : 'Todellinen'}
+                      {methodLabel(
+                        taxCalc.omavero.recommended_method,
+                        taxCalc.omavero.hankintameno_olettama_rate
+                      )}
                     </Badge>
                   </div>
                   <span className="font-mono font-bold text-lg">
                     €{eur(
-                      taxCalc.omavero.recommended_method === 'hankintameno_olettama'
-                        ? taxCalc.omavero.hankintameno_olettama
-                        : taxCalc.omavero.hankintameno_todellinen
+                      taxCalc.omavero.hankintameno_kaytetty ??
+                        (taxCalc.omavero.recommended_method === 'hankintameno_olettama'
+                          ? taxCalc.omavero.hankintameno_olettama
+                          : taxCalc.omavero.hankintameno_todellinen)
                     )}
                   </span>
                 </div>
@@ -262,6 +288,14 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono">€{eur(lot.lot_cost_eur)}</span>
+                        {lot.applied_deemed_rate && (
+                          <Badge
+                            variant={lot.method === 'deemed' ? 'default' : 'secondary'}
+                            className="text-[10px] px-1"
+                          >
+                            {lot.method === 'deemed' ? `Olettama ${lot.applied_deemed_rate}` : 'Todellinen'}
+                          </Badge>
+                        )}
                         <Badge variant={lot.over_10_years ? 'default' : 'secondary'} className="text-[10px] px-1">
                           {lot.holding_years}y
                         </Badge>

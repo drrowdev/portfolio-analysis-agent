@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.transaction import TransactionCreate, TransactionRead
+from app.services import tax as tax_math
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -416,79 +417,73 @@ async def compute_tax_calculation(
             if live_rate:
                 fx_rate = float(live_rate)
 
-    # 3. Compute FIFO cost basis for this sell
-    proceeds = quantity * sell_price_eur
+    # 3. Compute FIFO cost basis for this sell. Each consumed lot becomes a
+    #    TaxLot input for the (DB-free, unit-tested) capital-gains math.
     remaining_to_sell = quantity
-    consumed_lots = []
-    total_fifo_cost = Decimal("0")
+    consumed_lots: list[dict] = []
+    lot_inputs: list[tax_math.TaxLot] = []
 
     while remaining_to_sell > 0 and lots:
         lot_qty, lot_price, lot_date = lots[0]
         holding_days = (sell_date - lot_date).days
         holding_years = holding_days / 365.25
+        over_10 = holding_years >= 10
+
+        take = lot_qty if lot_qty <= remaining_to_sell else remaining_to_sell
+        lot_cost = take * lot_price
+        consumed_lots.append({
+            "purchase_date": lot_date.isoformat(),
+            "quantity": float(take),
+            "cost_per_share_eur": float(lot_price),
+            "lot_cost_eur": float(lot_cost),
+            "holding_days": holding_days,
+            "holding_years": round(holding_years, 1),
+            "over_10_years": over_10,
+        })
+        lot_inputs.append(
+            tax_math.TaxLot(quantity=take, cost_per_share_eur=lot_price, over_10_years=over_10)
+        )
 
         if lot_qty <= remaining_to_sell:
-            lot_cost = lot_qty * lot_price
-            total_fifo_cost += lot_cost
-            consumed_lots.append({
-                "purchase_date": lot_date.isoformat(),
-                "quantity": float(lot_qty),
-                "cost_per_share_eur": float(lot_price),
-                "lot_cost_eur": float(lot_cost),
-                "holding_days": holding_days,
-                "holding_years": round(holding_years, 1),
-                "over_10_years": holding_years >= 10,
-            })
             remaining_to_sell -= lot_qty
             lots.pop(0)
         else:
-            lot_cost = remaining_to_sell * lot_price
-            total_fifo_cost += lot_cost
-            consumed_lots.append({
-                "purchase_date": lot_date.isoformat(),
-                "quantity": float(remaining_to_sell),
-                "cost_per_share_eur": float(lot_price),
-                "lot_cost_eur": float(lot_cost),
-                "holding_days": holding_days,
-                "holding_years": round(holding_years, 1),
-                "over_10_years": holding_years >= 10,
-            })
             lots[0][0] = lot_qty - remaining_to_sell
             remaining_to_sell = Decimal("0")
 
-    # 4. Calculate hankintameno-olettama (deemed acquisition cost)
-    # If any lot is over 10 years, 40%; otherwise 20%
-    any_over_10 = any(lot["over_10_years"] for lot in consumed_lots)
-    all_over_10 = all(lot["over_10_years"] for lot in consumed_lots) if consumed_lots else False
+    # 4-6. Per-lot hankintameno-olettama, method selection, and tax.
+    result = tax_math.compute(lot_inputs, sell_price_eur, fees_eur, quantity)
 
-    # For mixed holding periods, compute deemed cost per lot
-    deemed_cost_20 = proceeds * Decimal("0.20")
-    deemed_cost_40 = proceeds * Decimal("0.40")
+    # Annotate each consumed lot with the rate/method actually applied to it.
+    for lot_out, lot_res in zip(consumed_lots, result.lots):
+        lot_out["applied_deemed_rate"] = f"{int(lot_res.applied_rate * 100)}%"
+        lot_out["method"] = lot_res.method
 
-    # Determine which deemed rate is applicable
-    # Conservative: use the lot-weighted approach
-    # If all lots are over 10 years → 40%, otherwise → 20%
-    deemed_rate = Decimal("0.40") if all_over_10 else Decimal("0.20")
-    deemed_cost = proceeds * deemed_rate
+    method_label = {
+        "hankintameno_olettama": f"hankintameno-olettama ({result.rate_label})",
+        "todellinen_hankintameno": "todellinen hankintameno (FIFO)",
+        "yhdistelma": "eräkohtainen yhdistelmä (osa olettama, osa todellinen)",
+    }[result.recommended_method]
 
-    # 5. Choose the better method (lower gain = lower tax)
-    gain_fifo = proceeds - total_fifo_cost - fees_eur
-    gain_deemed = proceeds - deemed_cost  # fees not deductible with deemed cost
-
-    use_deemed = gain_deemed < gain_fifo
-    taxable_gain = min(gain_fifo, gain_deemed)
-
-    # 6. Compute tax (30% up to €30k, 34% above)
-    # Note: this is simplified — actual threshold is per-year across all gains
-    if taxable_gain <= 0:
-        tax_amount = Decimal("0")
-        effective_rate = Decimal("0")
-    elif taxable_gain <= 30000:
-        tax_amount = taxable_gain * Decimal("0.30")
-        effective_rate = Decimal("0.30")
-    else:
-        tax_amount = Decimal("30000") * Decimal("0.30") + (taxable_gain - Decimal("30000")) * Decimal("0.34")
-        effective_rate = tax_amount / taxable_gain
+    notes = [
+        "Hankintameno-olettama lasketaan eräkohtaisesti: 20 % myyntihinnasta "
+        "(omistus < 10 v) tai 40 % (omistus ≥ 10 v).",
+        f"Edullisin menetelmä tälle myynnille: {method_label}.",
+        "Pääomatulovero: 30 % enintään 30 000 € pääomatuloista vuodessa, 34 % "
+        "ylittävältä osalta. Tämä laskelma huomioi vain tämän myynnin — koko "
+        "vuoden pääomatulot voivat muuttaa veroprosenttia.",
+        "Tee ennakkoveroilmoitus OmaVerossa 2 kuukauden kuluessa myynnistä.",
+    ]
+    if result.shortfall_qty > 0:
+        notes.insert(
+            0,
+            f"⚠️ VAROITUS: myydyistä {float(quantity):g} osakkeesta vain "
+            f"{float(result.covered_qty):g} kpl löytyy ostotapahtumista. Puuttuvalle "
+            f"{float(result.shortfall_qty):g} osakkeelle käytettiin 20 % "
+            "hankintameno-olettamaa. Tarkista ostohistoria (ja aja tarvittaessa "
+            "/transactions/fix-fx-rates/{symbol}) — todellinen hankintameno voi "
+            "pienentää veroa.",
+        )
 
     return {
         "symbol": symbol,
@@ -500,38 +495,41 @@ async def compute_tax_calculation(
 
         # OmaVero form fields
         "omavero": {
-            "luovutushinta": float(proceeds),           # Sale proceeds
-            "hankintameno_todellinen": float(total_fifo_cost + fees_eur),  # Actual cost basis (FIFO + fees)
-            "hankintameno_olettama": float(deemed_cost),  # Deemed acquisition cost
-            "hankintameno_olettama_rate": f"{int(deemed_rate * 100)}%",
-            "recommended_method": "hankintameno_olettama" if use_deemed else "todellinen_hankintameno",
-            "luovutusvoitto": float(taxable_gain),      # Capital gain (using better method)
-            "veron_maara": float(tax_amount),            # Tax amount
-            "veroprosentti": f"{float(effective_rate * 100):.1f}%",  # Effective tax rate
+            "luovutushinta": float(result.proceeds_eur),  # Sale proceeds
+            "hankintameno_todellinen": float(result.actual_cost_total_eur + fees_eur),
+            "hankintameno_olettama": float(result.deemed_cost_total_eur),  # per-lot rates
+            "hankintameno_olettama_rate": result.rate_label,
+            "hankintameno_kaytetty": float(result.used_deduction_eur),  # effective deduction
+            "recommended_method": result.recommended_method,
+            "luovutusvoitto": float(result.optimum_gain_eur),
+            "veron_maara": float(result.tax_eur),
+            "veroprosentti": f"{float(result.effective_rate * 100):.1f}%",
         },
 
-        # Comparison of methods
+        # Comparison of single-method strategies
         "comparison": {
-            "fifo_cost_basis_eur": float(total_fifo_cost),
-            "fifo_gain_eur": float(gain_fifo),
-            "deemed_cost_eur": float(deemed_cost),
-            "deemed_gain_eur": float(gain_deemed),
-            "better_method": "deemed" if use_deemed else "actual",
-            "tax_savings_eur": float(abs(gain_fifo - gain_deemed) * (Decimal("0.30") if taxable_gain <= 30000 else Decimal("0.34"))),
+            "fifo_cost_basis_eur": float(result.actual_cost_total_eur),
+            "fifo_gain_eur": float(result.all_actual_gain_eur),
+            "deemed_cost_eur": float(result.deemed_cost_total_eur),
+            "deemed_gain_eur": float(result.all_deemed_gain_eur),
+            "better_method": "deemed" if result.all_deemed_gain_eur < result.all_actual_gain_eur else "actual",
+            "tax_savings_eur": float(
+                max(Decimal("0"), tax_math.capital_gains_tax(result.all_actual_gain_eur)[0] - result.tax_eur)
+            ),
+        },
+
+        # Coverage of the sold quantity by recorded acquisition lots
+        "coverage": {
+            "quantity_sold": float(quantity),
+            "quantity_covered": float(result.covered_qty),
+            "shortfall_qty": float(result.shortfall_qty),
         },
 
         # FIFO lot details
         "lots_consumed": consumed_lots,
 
         # Notes for user
-        "notes": [
-            "Hankintameno-olettama: 20% of sale price (held < 10 years) or 40% (held ≥ 10 years).",
-            f"Your lots qualify for the {'40%' if all_over_10 else '20%'} deemed rate.",
-            f"Using {'hankintameno-olettama' if use_deemed else 'actual FIFO cost basis'} results in lower tax.",
-            "Capital gains tax: 30% on gains up to €30,000/year, 34% on amounts above.",
-            "File ennakkoveroilmoitus in OmaVero within 2 months of the sale.",
-            "This calculation covers this sale only — your total yearly gains may change the tax bracket.",
-        ],
+        "notes": notes,
     }
 
 
