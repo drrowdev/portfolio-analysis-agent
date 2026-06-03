@@ -220,16 +220,31 @@ def _generate_pdf(data: dict) -> bytes:
 
     # OmaVero fields
     omavero = data["omavero"]
+    method_labels = {
+        "hankintameno_olettama": "Hankintameno-olettama",
+        "todellinen_hankintameno": "Todellinen hankintameno",
+        "yhdistelma": "Eräkohtainen yhdistelmä",
+    }
     elements.append(Paragraph("OmaVero — Täytettävät tiedot", heading_style))
     ov_data = [
         ["Luovutushinta (€)", _fmt_eur(omavero["luovutushinta"])],
         ["Hankintameno — todellinen (€)", _fmt_eur(omavero["hankintameno_todellinen"])],
         ["Hankintameno — olettama (€)", f'{_fmt_eur(omavero["hankintameno_olettama"])} ({omavero["hankintameno_olettama_rate"]})'],
-        ["Suositeltu menetelmä", "Hankintameno-olettama" if omavero["recommended_method"] == "hankintameno_olettama" else "Todellinen hankintameno"],
+    ]
+    if omavero.get("hankintameno_kaytetty") is not None:
+        ov_data.append(["Hankintameno — käytetty (€)", _fmt_eur(omavero["hankintameno_kaytetty"])])
+    ov_data.extend([
+        ["Suositeltu menetelmä", method_labels.get(omavero["recommended_method"], omavero["recommended_method"])],
         ["Luovutusvoitto (€)", _fmt_eur(omavero["luovutusvoitto"])],
         ["Ennakkovero (€)", _fmt_eur(omavero["veron_maara"])],
         ["Veroprosentti", omavero["veroprosentti"]],
-    ]
+    ])
+    coverage = data.get("coverage") or {}
+    if coverage.get("shortfall_qty", 0) > 0:
+        ov_data.insert(
+            1,
+            ["⚠️ Kattamaton määrä (kpl)", f'{coverage["shortfall_qty"]} / {coverage["quantity_sold"]} (20 % olettama)'],
+        )
     elements.append(_make_table(ov_data, highlight_last=True))
     elements.append(Spacer(1, 4 * mm))
 
