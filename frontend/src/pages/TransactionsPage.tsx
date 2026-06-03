@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { toast } from '@/hooks/useToast';
 import { useAccounts } from '@/hooks/useAccounts';
 import type { TransactionType } from '@/types/portfolio';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +18,7 @@ import {
   Coins,
   FileText,
   Filter,
+  Trash2,
   X,
 } from 'lucide-react';
 
@@ -106,6 +108,52 @@ export function TransactionsPage() {
       .map((tc: { transaction_id: string | null; id: string }) => [tc.transaction_id, tc.id])
   );
 
+  const queryClient = useQueryClient();
+
+  const deleteOneCalc = useMutation({
+    mutationFn: (id: string) => api.deleteTaxCalculation(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      toast({ title: 'Tax calculation deleted' });
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Failed to delete tax calculation',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
+
+  const deleteAllCalcs = useMutation({
+    mutationFn: () => api.deleteAllTaxCalculations(),
+    onSuccess: (res: { deleted: number }) => {
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      toast({ title: `Deleted ${res.deleted} saved tax calculation${res.deleted !== 1 ? 's' : ''}` });
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Failed to delete tax calculations',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
+
+  function handleDeleteOneCalc(calcId: string) {
+    if (window.confirm('Delete this saved tax calculation? You can re-run it afterwards.')) {
+      deleteOneCalc.mutate(calcId);
+    }
+  }
+
+  function handleDeleteAllCalcs() {
+    if (
+      window.confirm(
+        `Delete all ${taxCalcs.length} saved tax calculation(s)? You can re-run them afterwards.`
+      )
+    ) {
+      deleteAllCalcs.mutate();
+    }
+  }
+
   // State for opening tax calc from transaction row
   const [taxDialogOpen, setTaxDialogOpen] = useState(false);
   const [taxSellParams, setTaxSellParams] = useState<{
@@ -140,6 +188,18 @@ export function TransactionsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {taxCalcs.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDeleteAllCalcs}
+              disabled={deleteAllCalcs.isPending}
+              title="Delete all saved tax calculations so they can be re-run"
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Delete tax calcs ({taxCalcs.length})
+            </Button>
+          )}
           {hasActiveFilters && (
             <Button variant="ghost" size="sm" onClick={clearFilters}>
               <X className="h-4 w-4 mr-1" />
@@ -297,22 +357,34 @@ export function TransactionsPage() {
                       </td>
                       <td className="py-2 px-1">
                         {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') && (
-                          <button
-                            className={`p-1 rounded hover:bg-accent ${taxCalcByTxId.has(tx.id) ? 'text-blue-400' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
-                            title={taxCalcByTxId.has(tx.id) ? 'View tax calculation' : 'Calculate tax'}
-                            onClick={() => {
-                              setTaxSellParams({
-                                symbol: tx.symbol,
-                                quantity: Number(tx.quantity),
-                                sell_price_eur: Number(tx.price_eur),
-                                sell_date: tx.date,
-                                fees_eur: Number(tx.fees),
-                              });
-                              setTaxDialogOpen(true);
-                            }}
-                          >
-                            <FileText className="h-4 w-4" />
-                          </button>
+                          <div className="flex items-center gap-0.5">
+                            <button
+                              className={`p-1 rounded hover:bg-accent ${taxCalcByTxId.has(tx.id) ? 'text-blue-400' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
+                              title={taxCalcByTxId.has(tx.id) ? 'View tax calculation' : 'Calculate tax'}
+                              onClick={() => {
+                                setTaxSellParams({
+                                  symbol: tx.symbol,
+                                  quantity: Number(tx.quantity),
+                                  sell_price_eur: Number(tx.price_eur),
+                                  sell_date: tx.date,
+                                  fees_eur: Number(tx.fees),
+                                });
+                                setTaxDialogOpen(true);
+                              }}
+                            >
+                              <FileText className="h-4 w-4" />
+                            </button>
+                            {taxCalcByTxId.has(tx.id) && (
+                              <button
+                                className="p-1 rounded text-muted-foreground/40 hover:text-red-400 hover:bg-accent"
+                                title="Delete saved tax calculation"
+                                disabled={deleteOneCalc.isPending}
+                                onClick={() => handleDeleteOneCalc(taxCalcByTxId.get(tx.id) as string)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>

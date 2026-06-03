@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -73,6 +73,25 @@ async def save_tax_calculation(
             transaction_id = s.id
             break
 
+    # Idempotent save: re-running the same sale (after a logic correction)
+    # should REPLACE the previous calculation rather than create a duplicate.
+    # Match on the linked transaction when known, otherwise on the natural key
+    # (symbol + sell_date + quantity_sold).
+    if transaction_id is not None:
+        dup_stmt = select(TaxCalculation).where(
+            TaxCalculation.transaction_id == transaction_id
+        )
+    else:
+        dup_stmt = (
+            select(TaxCalculation)
+            .where(TaxCalculation.symbol == payload.symbol)
+            .where(TaxCalculation.sell_date == payload.sell_date)
+            .where(TaxCalculation.quantity_sold == payload.quantity_sold)
+        )
+    existing = list((await db.execute(dup_stmt)).scalars().all())
+    for old in existing:
+        await db.delete(old)
+
     calc = TaxCalculation(
         symbol=payload.symbol,
         sell_date=payload.sell_date,
@@ -108,7 +127,43 @@ async def list_tax_calculations(
     return [_to_read(tc) for tc in result.scalars().all()]
 
 
-@router.get("/by-transaction/{transaction_id}", response_model=Optional[TaxCalculationRead])
+@router.delete("/", status_code=200)
+async def delete_tax_calculations(
+    symbol: Optional[str] = Query(None),
+    year: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete saved tax calculations (optionally filtered by symbol/year).
+
+    With no filters, deletes ALL saved calculations — useful for re-running
+    them from scratch after a calculation-logic correction.
+    """
+    stmt = sa_delete(TaxCalculation)
+    if symbol:
+        stmt = stmt.where(TaxCalculation.symbol == symbol)
+    if year:
+        stmt = stmt.where(TaxCalculation.sell_date >= date(year, 1, 1))
+        stmt = stmt.where(TaxCalculation.sell_date <= date(year, 12, 31))
+
+    result = await db.execute(stmt)
+    await db.commit()
+    return {"deleted": result.rowcount or 0}
+
+
+@router.delete("/{calc_id}", status_code=204)
+async def delete_tax_calculation(
+    calc_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single saved tax calculation by id."""
+    result = await db.execute(
+        select(TaxCalculation).where(TaxCalculation.id == calc_id)
+    )
+    calc = result.scalar_one_or_none()
+    if calc is None:
+        raise HTTPException(status_code=404, detail="Tax calculation not found")
+    await db.delete(calc)
+    await db.commit()
 async def get_tax_calculation_by_transaction(
     transaction_id: str,
     db: AsyncSession = Depends(get_db),

@@ -232,6 +232,20 @@ export const api = {
   getTaxCalculationPdfUrl: (id: string) =>
     `${API_BASE}/transactions/tax-calculations/${id}/pdf`,
 
+  deleteTaxCalculation: (id: string) =>
+    request<void>(`/transactions/tax-calculations/${id}`, { method: 'DELETE' }),
+
+  deleteAllTaxCalculations: (params?: { symbol?: string; year?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.symbol) query.set('symbol', params.symbol);
+    if (params?.year) query.set('year', String(params.year));
+    const qs = query.toString();
+    return request<{ deleted: number }>(
+      `/transactions/tax-calculations/${qs ? '?' + qs : ''}`,
+      { method: 'DELETE' }
+    );
+  },
+
   chatStream:async function* (
     message: string,
     history: { role: string; content: string }[],
