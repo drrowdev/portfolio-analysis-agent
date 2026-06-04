@@ -174,6 +174,11 @@ def _dividends_for_year(
         if t.txn_type != DIVIDEND_TYPE or t.date.year != year:
             continue
         gross = t.total_eur or Decimal("0")
+        if gross <= 0:
+            # Negative/zero rows are withholding (e.g. Nordnet ENNAKKOPIDÄTYS) —
+            # tax already paid, not dividend income. Listed-share dividend income
+            # is always a positive gross amount.
+            continue
         if t.tax_treatment == DEFERRED:
             excluded_ost_gross += gross
             continue

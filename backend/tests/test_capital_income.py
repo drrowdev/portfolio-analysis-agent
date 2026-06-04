@@ -155,6 +155,19 @@ def test_30_34_bracket_split():
     assert s.amount_over_threshold_eur == s.combined_taxable_eur - Decimal("30000")
 
 
+def test_negative_dividend_rows_are_withholding_not_income():
+    # Nordnet stores OSINKO (+gross) and ENNAKKOPIDÄTYS (-withholding) both as
+    # "dividend". Only the positive gross row is taxable income.
+    txns = [
+        _div("acc1", "REG1V", date(YEAR, 4, 5), 486.40),   # OSINKO gross
+        _div("acc1", "REG1V", date(YEAR, 4, 5), -124.03),  # ENNAKKOPIDÄTYS
+    ]
+    s = compute_capital_income(txns, YEAR)
+    assert s.gross_dividends_eur == Decimal("486.40")
+    assert s.taxable_dividends_eur == Decimal("486.40") * LISTED_DIVIDEND_TAXABLE_FRACTION
+    assert s.dividend_payment_count == 1
+
+
 def test_prior_year_sales_excluded_but_feed_fifo():
     # A sale in a prior year must consume FIFO lots but not count this year.
     txns = [
