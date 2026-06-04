@@ -18,6 +18,8 @@ from app.services import tax as tax_math
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
+ZERO = Decimal("0")
+
 
 @router.post("/", response_model=TransactionRead, status_code=201)
 async def create_transaction(
@@ -418,6 +420,47 @@ async def trigger_dividend_check(
     }
 
 
+async def _year_capital_income(db: AsyncSession, year: int) -> cap_income.CapitalIncomeSummary:
+    """Compute the tracked taxable capital-income summary for ``year``.
+
+    Same data set as ``GET /capital-income-summary`` (all gain/dividend-relevant
+    transactions across all years for full FIFO history; OST excluded inside the
+    service). Used by the tax-calculation endpoint to position a sale's gain on
+    the per-year 30 %/34 % bracket.
+    """
+    acc_result = await db.execute(select(Account))
+    treatment_by_id = {str(a.id): a.tax_treatment.value for a in acc_result.scalars().all()}
+
+    relevant = [
+        TransactionType.buy,
+        TransactionType.espp_purchase,
+        TransactionType.sell,
+        TransactionType.espp_sale,
+        TransactionType.dividend,
+    ]
+    tx_result = await db.execute(
+        select(Transaction)
+        .where(Transaction.transaction_type.in_(relevant))
+        .order_by(Transaction.date)
+    )
+    rows = list(tx_result.scalars().all())
+    txns = [
+        cap_income.IncomeTxn(
+            account_id=str(t.account_id),
+            tax_treatment=treatment_by_id.get(str(t.account_id), "standard"),
+            symbol=t.symbol,
+            txn_type=t.transaction_type.value,
+            date=t.date,
+            quantity=t.quantity or Decimal("0"),
+            price_eur=t.price_eur or Decimal("0"),
+            total_eur=t.total_eur or Decimal("0"),
+            fees=t.fees or Decimal("0"),
+        )
+        for t in rows
+    ]
+    return cap_income.compute_capital_income(txns, year)
+
+
 @router.get("/tax-calculation")
 async def compute_tax_calculation(
     symbol: str = Query(..., description="Symbol that was sold"),
@@ -552,6 +595,65 @@ async def compute_tax_calculation(
     # 4-6. Per-lot hankintameno-olettama, method selection, and tax.
     result = tax_math.compute(lot_inputs, sell_price_eur, fees_eur, quantity)
 
+    # --- Automatic 30 %/34 % bracket positioning -------------------------------
+    # Position this sale's gain on the per-YEAR €30k bracket using the user's
+    # other tracked capital income (realized gains + 85% dividends, OST excluded)
+    # for the same calendar year. The tracked summary already includes this sale
+    # if it is a saved transaction, so subtract this sale's own gain to avoid
+    # double-counting; for a hypothetical (unsaved) sale nothing is subtracted.
+    year = sell_date.year
+    year_summary = await _year_capital_income(db, year)
+    already_saved = await db.scalar(
+        select(func.count())
+        .select_from(Transaction)
+        .where(
+            Transaction.transaction_type.in_(
+                [TransactionType.sell, TransactionType.espp_sale]
+            ),
+            Transaction.symbol == symbol,
+            Transaction.date == sell_date,
+            Transaction.quantity == quantity,
+        )
+    )
+    gain = result.optimum_gain_eur
+    prior_income = year_summary.combined_taxable_eur
+    if already_saved:
+        prior_income = prior_income - gain
+
+    # Bracket-aware tax for this sale (marginal stacking on prior YTD income).
+    tax_eur, effective_rate = tax_math.capital_gains_tax(gain, prior_income)
+
+    threshold = tax_math.BRACKET_THRESHOLD
+    # Split this sale's gain into the 30 %- and 34 %-taxed portions, consistent
+    # with capital_gains_tax(): income below 0 is shielded (loss carry within the
+    # year), 0–30k at 30 %, above 30k at 34 %.
+    _start = prior_income
+    _end = prior_income + gain
+    _t_start = max(_start, ZERO)
+    _t_end = max(_end, ZERO)
+    low_part = max(ZERO, min(_t_end, threshold) - min(_t_start, threshold))
+    high_part = max(ZERO, _t_end - max(_t_start, threshold))
+    headroom_before_sale = max(ZERO, threshold - max(prior_income, ZERO))
+    applies_high_rate = high_part > 0
+    crosses_threshold = low_part > 0 and high_part > 0
+    fully_above_threshold = applies_high_rate and low_part == 0
+
+    bracket = {
+        "year": year,
+        "prior_ytd_income_eur": float(prior_income),
+        "threshold_eur": float(threshold),
+        "headroom_before_sale_eur": float(headroom_before_sale),
+        "this_sale_gain_eur": float(gain),
+        "amount_taxed_at_low_eur": float(low_part),
+        "amount_taxed_at_high_eur": float(high_part),
+        "low_rate": float(tax_math.LOW_TAX_RATE),
+        "high_rate": float(tax_math.HIGH_TAX_RATE),
+        "applies_high_rate": applies_high_rate,
+        "crosses_threshold": crosses_threshold,
+        "fully_above_threshold": fully_above_threshold,
+        "already_saved": bool(already_saved),
+    }
+
     # Annotate each consumed lot with the rate/method actually applied to it.
     for lot_out, lot_res in zip(consumed_lots, result.lots):
         lot_out["applied_deemed_rate"] = f"{int(lot_res.applied_rate * 100)}%"
@@ -563,15 +665,38 @@ async def compute_tax_calculation(
         "yhdistelma": "eräkohtainen yhdistelmä (osa olettama, osa todellinen)",
     }[result.recommended_method]
 
+    if fully_above_threshold:
+        bracket_note = (
+            f"⚠️ Vuoden {year} aiemmat seuratut pääomatulot "
+            f"({float(prior_income):.2f} €) ylittävät jo 30 000 € rajan, joten "
+            f"tämän myynnin koko luovutusvoitto ({float(gain):.2f} €) verotetaan "
+            f"34 %:n mukaan."
+        )
+    elif crosses_threshold:
+        bracket_note = (
+            f"⚠️ Tämä myynti ylittää 30 000 € pääomatulorajan vuonna {year}: "
+            f"{float(low_part):.2f} € verotetaan 30 % ja {float(high_part):.2f} € "
+            f"34 %:n mukaan (vuoden aiemmat seuratut pääomatulot "
+            f"{float(prior_income):.2f} €)."
+        )
+    else:
+        bracket_note = (
+            f"Vuoden {year} aiemmat seuratut pääomatulot "
+            f"({float(prior_income):.2f} €) on huomioitu: tämä myynti pysyy 30 %:n "
+            f"portaassa (rajaan jäljellä {float(headroom_before_sale):.2f} €)."
+        )
+
     notes = [
         "Hankintameno-olettama lasketaan eräkohtaisesti: 20 % myyntihinnasta "
         "(omistus < 10 v) tai 40 % (omistus ≥ 10 v).",
         f"Edullisin menetelmä tälle myynnille: {method_label}.",
+        bracket_note,
         "Pääomatulovero: 30 % enintään 30 000 € pääomatuloista vuodessa, 34 % "
-        "ylittävältä osalta. Tämä laskelma huomioi vain tämän myynnin — koko "
-        "vuoden muut pääomatulot (esim. osingot, vuokratulot, muut "
-        "luovutusvoitot) ja vähennyskelpoiset tappiot voivat muuttaa "
-        "todellista veroprosenttia.",
+        "ylittävältä osalta. Laskelma huomioi tässä sovelluksessa seuratut "
+        "pääomatulot (luovutusvoitot + 85 % osingoista, OST-tili pois lukien). "
+        "Sovelluksen ulkopuoliset pääomatulot (vuokratulot, korot, "
+        "listaamattomien yhtiöiden osingot ym.) lasketaan samaan 30 000 € "
+        "rajaan, mutta eivät näy tässä.",
         "Pienten luovutusten verovapaus (TVL 48.6 §): jos verovuoden KAIKKIEN "
         "omaisuuden luovutusten yhteenlasketut myyntihinnat ovat enintään "
         "1 000 €, luovutusvoitto on verovapaa. Tämä laskelma ei näe muita "
@@ -610,9 +735,12 @@ async def compute_tax_calculation(
             "hankintameno_kaytetty": float(result.used_deduction_eur),  # effective deduction
             "recommended_method": result.recommended_method,
             "luovutusvoitto": float(result.optimum_gain_eur),
-            "veron_maara": float(result.tax_eur),
-            "veroprosentti": f"{float(result.effective_rate * 100):.1f}%",
+            "veron_maara": float(tax_eur),
+            "veroprosentti": f"{float(effective_rate * 100):.1f}%",
         },
+
+        # Automatic 30%/34% bracket positioning for the year
+        "bracket": bracket,
 
         # Comparison of single-method strategies
         "comparison": {
@@ -622,7 +750,11 @@ async def compute_tax_calculation(
             "deemed_gain_eur": float(result.all_deemed_gain_eur),
             "better_method": "deemed" if result.all_deemed_gain_eur < result.all_actual_gain_eur else "actual",
             "tax_savings_eur": float(
-                max(Decimal("0"), tax_math.capital_gains_tax(result.all_actual_gain_eur)[0] - result.tax_eur)
+                max(
+                    ZERO,
+                    tax_math.capital_gains_tax(result.all_actual_gain_eur, prior_income)[0]
+                    - tax_eur,
+                )
             ),
         },
 

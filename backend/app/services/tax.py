@@ -61,17 +61,38 @@ def deemed_rate(over_10_years: bool) -> Decimal:
     return RATE_OVER_10 if over_10_years else RATE_UNDER_10
 
 
-def capital_gains_tax(gain: Decimal) -> tuple[Decimal, Decimal]:
-    """Return ``(tax, effective_rate)`` for a taxable gain.
+def bracket_total_tax(income: Decimal) -> Decimal:
+    """Total Finnish capital-income tax on a year's net positive capital income.
 
-    Per-sale 30k/34k bracket — callers must note the threshold is really a
-    per-year, total-capital-income figure.
+    30 % up to :data:`BRACKET_THRESHOLD` (€30,000), 34 % on the excess. Returns
+    0 for non-positive income (a net capital loss owes no tax).
     """
-    if gain <= 0:
+    if income <= ZERO:
+        return ZERO
+    if income <= BRACKET_THRESHOLD:
+        return income * LOW_TAX_RATE
+    return BRACKET_THRESHOLD * LOW_TAX_RATE + (income - BRACKET_THRESHOLD) * HIGH_TAX_RATE
+
+
+def capital_gains_tax(
+    gain: Decimal, prior_year_income: Decimal = ZERO
+) -> tuple[Decimal, Decimal]:
+    """Return ``(tax, effective_rate)`` for a sale's gain.
+
+    The 30 %/34 % bracket is a **per-year, total-capital-income** figure, not a
+    per-sale one. ``prior_year_income`` is the taxable capital income already
+    realised in the same calendar year from *other* sources (other realized
+    gains and taxable dividends), net of losses. The tax attributable to this
+    sale is then the **marginal** tax of stacking ``gain`` on top of that prior
+    income, so the 34 % rate kicks in automatically once the year crosses
+    €30,000. With the default ``prior_year_income = 0`` this reduces to the
+    plain per-sale bracket (30 % up to €30k of this gain, 34 % above).
+    """
+    if gain <= ZERO:
         return ZERO, ZERO
-    if gain <= BRACKET_THRESHOLD:
-        return gain * LOW_TAX_RATE, LOW_TAX_RATE
-    tax = BRACKET_THRESHOLD * LOW_TAX_RATE + (gain - BRACKET_THRESHOLD) * HIGH_TAX_RATE
+    tax = bracket_total_tax(prior_year_income + gain) - bracket_total_tax(prior_year_income)
+    if tax < ZERO:
+        tax = ZERO
     return tax, tax / gain
 
 
@@ -125,6 +146,7 @@ def compute(
     sell_price_eur: Decimal,
     fees_eur: Decimal,
     quantity_sold: Decimal,
+    prior_year_income: Decimal = ZERO,
 ) -> TaxResult:
     """Compute the Finnish capital-gains tax for a single sale.
 
@@ -133,6 +155,11 @@ def compute(
     history), the shortfall shares are still entitled to the 20%
     hankintameno-olettama (no documentation required) and the shortfall is
     reported via ``TaxResult.shortfall_qty`` so the caller can warn the user.
+
+    ``prior_year_income`` is the taxable capital income already realised in the
+    same calendar year from other sources; it shifts this sale up the 30 %/34 %
+    bracket so the higher rate is applied automatically once the year total
+    crosses €30,000.
     """
     proceeds_total = quantity_sold * sell_price_eur
     covered_qty = sum((lot.quantity for lot in lots), ZERO)
@@ -195,7 +222,7 @@ def compute(
     all_deemed_gain = proceeds_total - deemed_cost_total
 
     used_deduction = proceeds_total - optimum_gain
-    tax, effective_rate = capital_gains_tax(optimum_gain)
+    tax, effective_rate = capital_gains_tax(optimum_gain, prior_year_income)
 
     if abs(optimum_gain - all_actual_gain) <= _EPS:
         recommended = "todellinen_hankintameno"

@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Calculator, Info, CheckCircle2, Download, Save } from 'lucide-react';
+import { FileText, Calculator, Info, CheckCircle2, Download, Save, AlertTriangle } from 'lucide-react';
 import { toast } from '@/hooks/useToast';
 
 interface TaxCalculationDialogProps {
@@ -62,6 +62,21 @@ interface TaxCalculation {
     deemed_gain_eur: number;
     better_method: string;
     tax_savings_eur: number;
+  };
+  bracket?: {
+    year: number;
+    prior_ytd_income_eur: number;
+    threshold_eur: number;
+    headroom_before_sale_eur: number;
+    this_sale_gain_eur: number;
+    amount_taxed_at_low_eur: number;
+    amount_taxed_at_high_eur: number;
+    low_rate: number;
+    high_rate: number;
+    applies_high_rate: boolean;
+    crosses_threshold: boolean;
+    fully_above_threshold: boolean;
+    already_saved: boolean;
   };
   coverage?: {
     quantity_sold: number;
@@ -197,6 +212,59 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
                 )}
               </div>
             </div>
+
+            {/* 30k bracket positioning */}
+            {taxCalc.bracket && (
+              taxCalc.bracket.applies_high_rate ? (
+                <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/10 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+                    <div className="space-y-1.5">
+                      <h3 className="text-sm font-semibold text-amber-300">
+                        {taxCalc.bracket.fully_above_threshold
+                          ? `Koko myynti verotetaan ${Math.round(taxCalc.bracket.high_rate * 100)} %:n mukaan`
+                          : `30 000 € raja ylittyy — osa myynnistä verotetaan ${Math.round(taxCalc.bracket.high_rate * 100)} %:n mukaan`}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        Vuoden {taxCalc.bracket.year} seuratut pääomatulot ennen tätä myyntiä:{' '}
+                        <span className="font-mono font-semibold text-foreground">
+                          €{eur(taxCalc.bracket.prior_ytd_income_eur)}
+                        </span>
+                        {' '}/ raja €{eur(taxCalc.bracket.threshold_eur)}.
+                      </p>
+                      {taxCalc.bracket.crosses_threshold && (
+                        <div className="text-xs text-muted-foreground">
+                          Tämän myynnin voitto jakautuu:
+                          <div className="mt-1 grid grid-cols-2 gap-2">
+                            <div className="rounded bg-background/40 px-2 py-1">
+                              <div className="text-muted-foreground">{Math.round(taxCalc.bracket.low_rate * 100)} %:n osuus</div>
+                              <div className="font-mono font-semibold text-foreground">€{eur(taxCalc.bracket.amount_taxed_at_low_eur)}</div>
+                            </div>
+                            <div className="rounded bg-amber-500/10 px-2 py-1">
+                              <div className="text-amber-300">{Math.round(taxCalc.bracket.high_rate * 100)} %:n osuus</div>
+                              <div className="font-mono font-semibold text-amber-300">€{eur(taxCalc.bracket.amount_taxed_at_high_eur)}</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                  <div className="flex items-start gap-2">
+                    <Info className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-muted-foreground">
+                      Pysyy {Math.round(taxCalc.bracket.low_rate * 100)} %:n portaassa. Vuoden {taxCalc.bracket.year}{' '}
+                      seuratut pääomatulot{' '}
+                      <span className="font-mono font-semibold text-foreground">€{eur(taxCalc.bracket.prior_ytd_income_eur)}</span>
+                      {' '}/ €{eur(taxCalc.bracket.threshold_eur)} — 30 %:n rajaan jäljellä{' '}
+                      <span className="font-mono font-semibold text-emerald-400">€{eur(taxCalc.bracket.headroom_before_sale_eur)}</span>.
+                    </p>
+                  </div>
+                </div>
+              )
+            )}
 
             {/* OmaVero Fields */}
             <div className="rounded-lg border-2 border-blue-500/30 bg-blue-500/5 p-4">

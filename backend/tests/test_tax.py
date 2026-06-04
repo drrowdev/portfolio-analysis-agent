@@ -45,6 +45,71 @@ def test_capital_gains_tax_high_bracket():
 
 
 # ---------------------------------------------------------------------------
+# bracket_total_tax: total year tax on net positive capital income
+# ---------------------------------------------------------------------------
+
+def test_bracket_total_tax():
+    assert tax.bracket_total_tax(D("0")) == D("0")
+    assert tax.bracket_total_tax(D("-1000")) == D("0")
+    assert tax.bracket_total_tax(D("20000")) == D("6000")
+    assert tax.bracket_total_tax(D("30000")) == D("9000")
+    # 9000 + 5000*0.34 = 10700
+    assert tax.bracket_total_tax(D("35000")) == D("10700")
+
+
+# ---------------------------------------------------------------------------
+# capital_gains_tax with prior_year_income: marginal stacking on the bracket
+# ---------------------------------------------------------------------------
+
+def test_marginal_prior_zero_backward_compatible():
+    # prior=0 reduces to the plain per-sale bracket.
+    assert tax.capital_gains_tax(D("10000"), D("0")) == tax.capital_gains_tax(D("10000"))
+
+
+def test_marginal_prior_below_threshold_crossing():
+    # prior 25k, gain 10k: 5k at 30% (to reach 30k) + 5k at 34% = 1500 + 1700.
+    t, rate = tax.capital_gains_tax(D("10000"), D("25000"))
+    assert t == D("3200")
+    assert rate == D("3200") / D("10000")
+
+
+def test_marginal_prior_already_over_threshold():
+    # prior 35k already above 30k -> the whole gain is taxed at 34%.
+    t, rate = tax.capital_gains_tax(D("5000"), D("35000"))
+    assert t == D("1700")
+    assert rate == D("0.34")
+
+
+def test_marginal_prior_at_threshold():
+    # prior exactly 30k -> entire gain at 34%.
+    t, rate = tax.capital_gains_tax(D("5000"), D("30000"))
+    assert t == D("1700")
+    assert rate == D("0.34")
+
+
+def test_marginal_negative_prior_shields_gain():
+    # A net YTD loss of 5k shields the first 5k of gain; remainder at 30%.
+    # prior=-5000, gain=10000 -> taxable 5000 at 30% = 1500.
+    t, rate = tax.capital_gains_tax(D("10000"), D("-5000"))
+    assert t == D("1500")
+    assert rate == D("1500") / D("10000")
+
+
+def test_marginal_negative_prior_fully_shields():
+    # Loss larger than the gain -> no tax.
+    t, rate = tax.capital_gains_tax(D("3000"), D("-5000"))
+    assert t == D("0")
+    assert rate == D("0")
+
+
+def test_marginal_loss_shield_plus_threshold_crossing():
+    # prior=-2000, gain=40000: taxable income 0..38000.
+    # 30000 at 30% (9000) + 8000 at 34% (2720) = 11720.
+    t, _ = tax.capital_gains_tax(D("40000"), D("-2000"))
+    assert t == D("11720")
+
+
+# ---------------------------------------------------------------------------
 # deemed_rate per lot
 # ---------------------------------------------------------------------------
 
