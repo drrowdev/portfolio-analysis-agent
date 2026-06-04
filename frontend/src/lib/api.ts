@@ -237,23 +237,28 @@ export const api = {
       `/transactions/tax-calculations/by-transaction/${transactionId}`
     ),
 
-  getTaxCalculationsSummary: (year?: number) =>
+  getCapitalIncomeSummary: (year?: number) =>
     request<{
       year: number;
-      calculation_count: number;
-      net_gain_eur: number;
-      gains_eur: number;
-      losses_eur: number;
-      total_proceeds_eur: number;
+      taxable_gains_eur: number;
+      gross_dividends_eur: number;
+      taxable_dividends_eur: number;
+      dividend_taxable_fraction: number;
+      combined_taxable_eur: number;
       bracket_threshold_eur: number;
-      remaining_at_30pct_eur: number;
+      remaining_at_low_rate_eur: number;
       amount_over_threshold_eur: number;
       estimated_tax_eur: number;
       effective_rate: number;
       low_rate: number;
       high_rate: number;
-      sales: { id: string; symbol: string; sell_date: string; gain_eur: number; proceeds_eur: number }[];
-    }>(`/transactions/tax-calculations/summary${year ? `?year=${year}` : ''}`),
+      sale_count: number;
+      dividend_payment_count: number;
+      excluded_ost_dividends_eur: number;
+      excluded_ost_sale_count: number;
+      sales: { symbol: string; sell_date: string; quantity: number; proceeds_eur: number; gain_eur: number }[];
+      dividends: { symbol: string; gross_eur: number; taxable_eur: number; payments: number }[];
+    }>(`/transactions/capital-income-summary${year ? `?year=${year}` : ''}`),
 
   getTaxCalculationPdfUrl: (id: string) =>
     `${API_BASE}/transactions/tax-calculations/${id}/pdf`,

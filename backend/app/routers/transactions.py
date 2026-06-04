@@ -9,8 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.account import Account
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.transaction import TransactionCreate, TransactionRead
+from app.services import capital_income as cap_income
 from app.services import fx as fx_convert
 from app.services import tax as tax_math
 
@@ -306,6 +308,99 @@ async def get_dividends(
         "total_dividends_eur": float(total),
         "payment_count": len(dividends),
         "by_symbol": symbols_list,
+    }
+
+
+@router.get("/capital-income-summary")
+async def capital_income_summary(
+    year: int = Query(default=None, description="Tax year (default: current year)"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Year-to-date taxable capital income (gains + dividends) vs the €30k bracket.
+
+    Computed directly from stored transactions — no saved tax calculations
+    required. Excludes OST (``deferred``) accounts entirely (taxed only on
+    withdrawal); counts listed-share dividends at 85 % (15 % tax-free). Capital
+    gains use the per-lot best-of hankintameno-olettama engine.
+    """
+    import datetime
+
+    if year is None:
+        year = datetime.date.today().year
+
+    # Account tax treatment lookup.
+    acc_result = await db.execute(select(Account))
+    treatment_by_id = {str(a.id): a.tax_treatment.value for a in acc_result.scalars().all()}
+
+    # All gain/dividend-relevant transactions (all years — gains need full FIFO history).
+    relevant = [
+        TransactionType.buy,
+        TransactionType.espp_purchase,
+        TransactionType.sell,
+        TransactionType.espp_sale,
+        TransactionType.dividend,
+    ]
+    tx_result = await db.execute(
+        select(Transaction)
+        .where(Transaction.transaction_type.in_(relevant))
+        .order_by(Transaction.date)
+    )
+    rows = list(tx_result.scalars().all())
+
+    txns = [
+        cap_income.IncomeTxn(
+            account_id=str(t.account_id),
+            tax_treatment=treatment_by_id.get(str(t.account_id), "standard"),
+            symbol=t.symbol,
+            txn_type=t.transaction_type.value,
+            date=t.date,
+            quantity=t.quantity or Decimal("0"),
+            price_eur=t.price_eur or Decimal("0"),
+            total_eur=t.total_eur or Decimal("0"),
+            fees=t.fees or Decimal("0"),
+        )
+        for t in rows
+    ]
+
+    s = cap_income.compute_capital_income(txns, year)
+
+    return {
+        "year": s.year,
+        "taxable_gains_eur": float(s.taxable_gains_eur),
+        "gross_dividends_eur": float(s.gross_dividends_eur),
+        "taxable_dividends_eur": float(s.taxable_dividends_eur),
+        "dividend_taxable_fraction": float(cap_income.LISTED_DIVIDEND_TAXABLE_FRACTION),
+        "combined_taxable_eur": float(s.combined_taxable_eur),
+        "bracket_threshold_eur": float(s.bracket_threshold_eur),
+        "remaining_at_low_rate_eur": float(s.remaining_at_low_rate_eur),
+        "amount_over_threshold_eur": float(s.amount_over_threshold_eur),
+        "estimated_tax_eur": float(s.estimated_tax_eur),
+        "effective_rate": float(s.effective_rate),
+        "low_rate": float(s.low_rate),
+        "high_rate": float(s.high_rate),
+        "sale_count": s.sale_count,
+        "dividend_payment_count": s.dividend_payment_count,
+        "excluded_ost_dividends_eur": float(s.excluded_ost_dividends_eur),
+        "excluded_ost_sale_count": s.excluded_ost_sale_count,
+        "sales": [
+            {
+                "symbol": x.symbol,
+                "sell_date": x.sell_date.isoformat(),
+                "quantity": float(x.quantity),
+                "proceeds_eur": float(x.proceeds_eur),
+                "gain_eur": float(x.gain_eur),
+            }
+            for x in s.sales
+        ],
+        "dividends": [
+            {
+                "symbol": d.symbol,
+                "gross_eur": float(d.gross_eur),
+                "taxable_eur": float(d.taxable_eur),
+                "payments": d.payments,
+            }
+            for d in s.dividends
+        ],
     }
 
 

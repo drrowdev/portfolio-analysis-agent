@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.tax_calculation import TaxCalculation
 from app.models.transaction import Transaction, TransactionType
-from app.services import tax as tax_math
+from app.services import tax as tax_math  # noqa: F401  (kept for potential reuse)
 
 router = APIRouter(prefix="/transactions/tax-calculations", tags=["tax-calculations"])
 
@@ -129,82 +129,7 @@ async def list_tax_calculations(
     return [_to_read(tc) for tc in result.scalars().all()]
 
 
-@router.get("/summary")
-async def tax_calculations_summary(
-    year: Optional[int] = Query(None, description="Tax year (defaults to current year)"),
-    db: AsyncSession = Depends(get_db),
-):
-    """Year-to-date capital-gains summary against the €30,000 bracket.
-
-    Aggregates the taxable gains (luovutusvoitto) from the saved tax
-    calculations whose sell date falls in the year, and applies the Finnish
-    30 %/34 % pääomatulo bracket to the COMBINED net gain. The €30,000
-    threshold is a per-year, total-capital-income figure (not per sale), so
-    this combined view is the correct way to see how close the year is to the
-    higher 34 % bracket. NOTE: it only reflects sales that have a SAVED tax
-    calculation, and it does not include other capital income (dividends,
-    rental, other gains), which also counts toward the same €30,000 limit.
-    """
-    target_year = year or date.today().year
-    stmt = (
-        select(TaxCalculation)
-        .where(TaxCalculation.sell_date >= date(target_year, 1, 1))
-        .where(TaxCalculation.sell_date <= date(target_year, 12, 31))
-        .order_by(TaxCalculation.sell_date.asc())
-    )
-    rows = list((await db.execute(stmt)).scalars().all())
-
-    sales = []
-    total_gain = Decimal("0")
-    gains_only = Decimal("0")
-    losses_only = Decimal("0")
-    total_proceeds = Decimal("0")
-    for tc in rows:
-        try:
-            data = json.loads(tc.calculation_json)
-        except (TypeError, ValueError):
-            data = {}
-        omavero = data.get("omavero", {}) if isinstance(data, dict) else {}
-        gain = Decimal(str(omavero.get("luovutusvoitto", 0) or 0))
-        proceeds = Decimal(str(omavero.get("luovutushinta", 0) or 0))
-        total_gain += gain
-        total_proceeds += proceeds
-        if gain > 0:
-            gains_only += gain
-        elif gain < 0:
-            losses_only += -gain
-        sales.append(
-            {
-                "id": str(tc.id),
-                "symbol": tc.symbol,
-                "sell_date": tc.sell_date.isoformat(),
-                "gain_eur": float(gain),
-                "proceeds_eur": float(proceeds),
-            }
-        )
-
-    net_gain = total_gain
-    tax, eff = tax_math.capital_gains_tax(net_gain)
-    threshold = tax_math.BRACKET_THRESHOLD
-    remaining = max(Decimal("0"), threshold - net_gain)
-    over = max(Decimal("0"), net_gain - threshold)
-
-    return {
-        "year": target_year,
-        "calculation_count": len(sales),
-        "net_gain_eur": float(net_gain),
-        "gains_eur": float(gains_only),
-        "losses_eur": float(losses_only),
-        "total_proceeds_eur": float(total_proceeds),
-        "bracket_threshold_eur": float(threshold),
-        "remaining_at_30pct_eur": float(remaining),
-        "amount_over_threshold_eur": float(over),
-        "estimated_tax_eur": float(tax),
-        "effective_rate": float(eff),
-        "low_rate": float(tax_math.LOW_TAX_RATE),
-        "high_rate": float(tax_math.HIGH_TAX_RATE),
-        "sales": sales,
-    }
+@router.delete("/", status_code=200)
 async def delete_tax_calculations(
     symbol: Optional[str] = Query(None),
     year: Optional[int] = Query(None),

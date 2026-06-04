@@ -24,15 +24,15 @@ export function CapitalGainsTracker() {
   const [year, setYear] = useState(currentYear);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tax-calculations-summary', year],
-    queryFn: () => api.getTaxCalculationsSummary(year),
+    queryKey: ['capital-income-summary', year],
+    queryFn: () => api.getCapitalIncomeSummary(year),
   });
 
   if (isLoading) {
     return (
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium">Capital Gains vs €30k Bracket</CardTitle>
+          <CardTitle className="text-sm font-medium">Capital Income vs €30k Bracket</CardTitle>
         </CardHeader>
         <CardContent>
           <Skeleton className="h-[120px] w-full" />
@@ -42,11 +42,17 @@ export function CapitalGainsTracker() {
   }
 
   const threshold = data?.bracket_threshold_eur ?? 30000;
-  const net = data?.net_gain_eur ?? 0;
+  const combined = data?.combined_taxable_eur ?? 0;
+  const gains = data?.taxable_gains_eur ?? 0;
+  const grossDiv = data?.gross_dividends_eur ?? 0;
+  const taxableDiv = data?.taxable_dividends_eur ?? 0;
   const over = data?.amount_over_threshold_eur ?? 0;
-  const remaining = data?.remaining_at_30pct_eur ?? threshold;
-  const pct = Math.min(100, Math.max(0, (net / threshold) * 100));
+  const remaining = data?.remaining_at_low_rate_eur ?? threshold;
+  const pct = Math.min(100, Math.max(0, (combined / threshold) * 100));
   const isOver = over > 0;
+  const highPct = Math.round((data?.high_rate ?? 0.34) * 100);
+  const divFraction = Math.round((data?.dividend_taxable_fraction ?? 0.85) * 100);
+  const hasActivity = !!data && (data.sale_count > 0 || data.dividend_payment_count > 0);
   const mask = (v: string) => (privacyMode ? '•••••' : v);
 
   return (
@@ -55,7 +61,7 @@ export function CapitalGainsTracker() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium flex items-center gap-1.5">
             <Gauge className="h-4 w-4 text-muted-foreground" />
-            Capital Gains vs €30k Bracket
+            Capital Income vs €30k Bracket
           </CardTitle>
           <div className="flex items-center gap-1">
             <button onClick={() => setYear((y) => y - 1)} className="p-0.5 rounded hover:bg-muted">
@@ -73,15 +79,15 @@ export function CapitalGainsTracker() {
         </div>
       </CardHeader>
       <CardContent>
-        {!data || data.calculation_count === 0 ? (
+        {!hasActivity ? (
           <p className="text-sm text-muted-foreground text-center py-4">
-            No saved tax calculations in {year}
+            No taxable gains or dividends in {year}
           </p>
         ) : (
           <div className="space-y-3">
-            {/* Net YTD gain */}
+            {/* Combined taxable capital income YTD */}
             <div className="flex items-baseline justify-between">
-              <span className="text-2xl font-bold tabular-nums">{mask(eur2(net))}</span>
+              <span className="text-2xl font-bold tabular-nums">{mask(eur2(combined))}</span>
               <span className="text-xs text-muted-foreground">of {eur(threshold)} at 30%</span>
             </div>
 
@@ -98,24 +104,26 @@ export function CapitalGainsTracker() {
               <div className="flex items-start gap-1.5 text-sm text-amber-600 dark:text-amber-500">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 <span>
-                  {mask(eur2(over))} over the €30k threshold — that portion is taxed at {Math.round((data.high_rate ?? 0.34) * 100)}%.
+                  {mask(eur2(over))} over the €30k threshold — that portion is taxed at {highPct}%.
                 </span>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{mask(eur2(remaining))}</span> of headroom before the {Math.round((data.high_rate ?? 0.34) * 100)}% bracket.
+                <span className="font-medium text-foreground">{mask(eur2(remaining))}</span> of headroom before the {highPct}% bracket.
               </p>
             )}
 
-            {/* Tax + breakdown */}
+            {/* Breakdown: gains, taxable dividends, est. tax */}
             <div className="grid grid-cols-3 gap-2 text-sm border-t border-border pt-3">
               <div>
-                <p className="text-muted-foreground text-xs">Gains</p>
-                <p className="font-medium text-emerald-500 tabular-nums">{mask(eur2(data.gains_eur))}</p>
+                <p className="text-muted-foreground text-xs">Taxable gains</p>
+                <p className={`font-medium tabular-nums ${gains < 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                  {mask(eur2(gains))}
+                </p>
               </div>
               <div>
-                <p className="text-muted-foreground text-xs">Losses</p>
-                <p className="font-medium text-red-500 tabular-nums">{mask(eur2(data.losses_eur))}</p>
+                <p className="text-muted-foreground text-xs">Dividends ({divFraction}%)</p>
+                <p className="font-medium tabular-nums">{mask(eur2(taxableDiv))}</p>
               </div>
               <div>
                 <p className="text-muted-foreground text-xs">Est. tax</p>
@@ -124,8 +132,16 @@ export function CapitalGainsTracker() {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              From {data.calculation_count} saved calculation{data.calculation_count !== 1 ? 's' : ''}. Dividends and other
-              capital income also count toward the €30k limit but are not included here.
+              Live from transactions: {data.sale_count} sale{data.sale_count !== 1 ? 's' : ''}
+              {' '}and {data.dividend_payment_count} dividend{data.dividend_payment_count !== 1 ? 's' : ''}
+              {grossDiv > 0 && (
+                <> ({mask(eur2(grossDiv))} gross, {divFraction}% taxable per TVL 33a §)</>
+              )}.
+              {(data.excluded_ost_sale_count > 0 || data.excluded_ost_dividends_eur > 0) && (
+                <> OST excluded (taxed on withdrawal): {data.excluded_ost_sale_count} sale
+                {data.excluded_ost_sale_count !== 1 ? 's' : ''}, {mask(eur2(data.excluded_ost_dividends_eur))} dividends.</>
+              )}
+              {' '}Rental, interest and other capital income are not tracked here.
             </p>
           </div>
         )}

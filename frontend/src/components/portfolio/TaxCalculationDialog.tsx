@@ -123,7 +123,7 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
     onSuccess: (data) => {
       setSavedId(data.id);
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
-      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
       toast({ title: 'Saved', description: 'Tax calculation stored successfully.' });
     },
     onError: (err) => {

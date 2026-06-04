@@ -115,7 +115,7 @@ export function TransactionsPage() {
     mutationFn: (id: string) => api.deleteTaxCalculation(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
-      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
       toast({ title: 'Tax calculation deleted' });
     },
     onError: (e: unknown) =>
@@ -130,7 +130,7 @@ export function TransactionsPage() {
     mutationFn: () => api.deleteAllTaxCalculations(),
     onSuccess: (res: { deleted: number }) => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
-      queryClient.invalidateQueries({ queryKey: ['tax-calculations-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
       toast({ title: `Deleted ${res.deleted} saved tax calculation${res.deleted !== 1 ? 's' : ''}` });
     },
     onError: (e: unknown) =>
