@@ -25,6 +25,12 @@ import {
 
 const PAGE_SIZE = 50;
 
+// Symbols whose Finnish capital-gains tax we calculate ourselves. Other holdings
+// are at Nordnet, which reports/withholds Finnish tax automatically, so the
+// ennakkovero calculator is hidden for them. Mirrors the backend allowlist in
+// holdings.py (`tax_filing_required`).
+const TAX_FILING_SYMBOLS = new Set(['MSFT']);
+
 const TYPE_LABELS: Record<TransactionType, string> = {
   buy: 'Buy',
   sell: 'Sell',
@@ -361,7 +367,8 @@ export function TransactionsPage() {
                         {tx.fx_rate ? tx.fx_rate.toFixed(4) : '—'}
                       </td>
                       <td className="py-2 px-1">
-                        {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') && (
+                        {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') &&
+                          TAX_FILING_SYMBOLS.has(tx.symbol) && (
                           <div className="flex items-center gap-0.5">
                             <button
                               className={`p-1 rounded hover:bg-accent ${taxCalcByTxId.has(tx.id) ? 'text-blue-400' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}

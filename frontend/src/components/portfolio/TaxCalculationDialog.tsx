@@ -100,6 +100,132 @@ function methodLabel(method: string, rate: string): string {
   return 'Todellinen';
 }
 
+function pct(rate: number): string {
+  return `${Math.round(rate * 100)} %`;
+}
+
+type Bracket = NonNullable<TaxCalculation['bracket']>;
+
+/** Visualises where this sale's gain lands on the per-year €30k / 34% bracket. */
+function BracketCard({ b }: { b: Bracket }) {
+  const lowTax = b.amount_taxed_at_low_eur * b.low_rate;
+  const highTax = b.amount_taxed_at_high_eur * b.high_rate;
+  const totalTax = lowTax + highTax;
+  const high = b.applies_high_rate;
+
+  // Stacked bar: prior income (if positive) + this sale's 30% part + 34% part,
+  // scaled so the whole stack (or at least the €30k threshold) fits the width.
+  const priorPos = Math.max(b.prior_ytd_income_eur, 0);
+  const scale = Math.max(priorPos + b.this_sale_gain_eur, b.threshold_eur) || 1;
+  const w = (v: number) => `${Math.max(0, Math.min(100, (v / scale) * 100))}%`;
+  const thresholdLeft = `${Math.min(100, (b.threshold_eur / scale) * 100)}%`;
+
+  return (
+    <div
+      className={`rounded-lg border-2 p-4 ${
+        high ? 'border-amber-500/50 bg-amber-500/10' : 'border-emerald-500/40 bg-emerald-500/5'
+      }`}
+    >
+      {/* Header */}
+      <div className="flex items-start gap-2 mb-3">
+        {high ? (
+          <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
+        ) : (
+          <CheckCircle2 className="h-5 w-5 text-emerald-400 mt-0.5 shrink-0" />
+        )}
+        <div>
+          <h3 className={`text-sm font-semibold ${high ? 'text-amber-300' : 'text-emerald-300'}`}>
+            {high
+              ? b.fully_above_threshold
+                ? `Koko myynti verotetaan ${pct(b.high_rate)} mukaan`
+                : `30 000 € raja ylittyy — osa myynnistä verotetaan ${pct(b.high_rate)} mukaan`
+              : `Myynti pysyy ${pct(b.low_rate)} portaassa`}
+          </h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Vuoden {b.year} pääomatulot ennen tätä myyntiä{' '}
+            <span className="font-mono font-semibold text-foreground">
+              €{eur(b.prior_ytd_income_eur)}
+            </span>{' '}
+            / raja €{eur(b.threshold_eur)}
+          </p>
+        </div>
+      </div>
+
+      {/* Stacked bracket bar */}
+      <div className="relative h-6 w-full rounded bg-background/50 overflow-hidden">
+        {priorPos > 0 && (
+          <div className="absolute inset-y-0 left-0 bg-muted-foreground/30" style={{ width: w(priorPos) }} />
+        )}
+        {b.amount_taxed_at_low_eur > 0 && (
+          <div
+            className="absolute inset-y-0 bg-sky-500/60"
+            style={{ left: w(priorPos), width: w(b.amount_taxed_at_low_eur) }}
+          />
+        )}
+        {b.amount_taxed_at_high_eur > 0 && (
+          <div
+            className="absolute inset-y-0 bg-amber-500/70"
+            style={{ left: w(priorPos + b.amount_taxed_at_low_eur), width: w(b.amount_taxed_at_high_eur) }}
+          />
+        )}
+        {/* €30k threshold marker */}
+        <div className="absolute inset-y-0 border-l-2 border-dashed border-foreground/70" style={{ left: thresholdLeft }} />
+      </div>
+      <div className="flex justify-between text-[10px] text-muted-foreground mt-1 mb-3">
+        <span>€0</span>
+        <span className="font-medium text-foreground/70">↑ 30 000 €</span>
+        <span>€{eur(scale)}</span>
+      </div>
+
+      {/* Breakdown */}
+      <div className="space-y-1.5 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-muted-foreground">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm bg-muted-foreground/30" />
+            Aiemmat pääomatulot {b.year}
+          </span>
+          <span className="font-mono">€{eur(b.prior_ytd_income_eur)}</span>
+        </div>
+        {b.amount_taxed_at_low_eur > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-sky-500/60" />
+              Tästä myynnistä {pct(b.low_rate)} verolla
+            </span>
+            <span className="font-mono">
+              €{eur(b.amount_taxed_at_low_eur)}{' '}
+              <span className="text-muted-foreground">→ vero €{eur(lowTax)}</span>
+            </span>
+          </div>
+        )}
+        {b.amount_taxed_at_high_eur > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-amber-300">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-500/70" />
+              Tästä myynnistä {pct(b.high_rate)} verolla
+            </span>
+            <span className="font-mono text-amber-300">
+              €{eur(b.amount_taxed_at_high_eur)}{' '}
+              <span className="opacity-70">→ vero €{eur(highTax)}</span>
+            </span>
+          </div>
+        )}
+        <div className="flex items-center justify-between border-t border-border/50 pt-1.5 font-semibold">
+          <span>Ennakkovero tästä myynnistä</span>
+          <span className="font-mono">€{eur(totalTax)}</span>
+        </div>
+        {!high && (
+          <p className="text-[11px] text-muted-foreground pt-0.5">
+            30 %:n rajaan jäljellä{' '}
+            <span className="font-mono text-emerald-400">€{eur(b.headroom_before_sale_eur)}</span>{' '}
+            ennen kuin korkeampi 34 %:n vero alkaa.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalculationDialogProps) {
   const [savedId, setSavedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -213,57 +339,7 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
             </div>
 
             {/* 30k bracket positioning */}
-            {taxCalc.bracket && (
-              taxCalc.bracket.applies_high_rate ? (
-                <div className="rounded-lg border-2 border-amber-500/50 bg-amber-500/10 p-4">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="h-5 w-5 text-amber-400 mt-0.5 shrink-0" />
-                    <div className="space-y-1.5">
-                      <h3 className="text-sm font-semibold text-amber-300">
-                        {taxCalc.bracket.fully_above_threshold
-                          ? `Koko myynti verotetaan ${Math.round(taxCalc.bracket.high_rate * 100)} %:n mukaan`
-                          : `30 000 € raja ylittyy — osa myynnistä verotetaan ${Math.round(taxCalc.bracket.high_rate * 100)} %:n mukaan`}
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Vuoden {taxCalc.bracket.year} seuratut pääomatulot ennen tätä myyntiä:{' '}
-                        <span className="font-mono font-semibold text-foreground">
-                          €{eur(taxCalc.bracket.prior_ytd_income_eur)}
-                        </span>
-                        {' '}/ raja €{eur(taxCalc.bracket.threshold_eur)}.
-                      </p>
-                      {taxCalc.bracket.crosses_threshold && (
-                        <div className="text-xs text-muted-foreground">
-                          Tämän myynnin voitto jakautuu:
-                          <div className="mt-1 grid grid-cols-2 gap-2">
-                            <div className="rounded bg-background/40 px-2 py-1">
-                              <div className="text-muted-foreground">{Math.round(taxCalc.bracket.low_rate * 100)} %:n osuus</div>
-                              <div className="font-mono font-semibold text-foreground">€{eur(taxCalc.bracket.amount_taxed_at_low_eur)}</div>
-                            </div>
-                            <div className="rounded bg-amber-500/10 px-2 py-1">
-                              <div className="text-amber-300">{Math.round(taxCalc.bracket.high_rate * 100)} %:n osuus</div>
-                              <div className="font-mono font-semibold text-amber-300">€{eur(taxCalc.bracket.amount_taxed_at_high_eur)}</div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-                  <div className="flex items-start gap-2">
-                    <Info className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
-                    <p className="text-xs text-muted-foreground">
-                      Pysyy {Math.round(taxCalc.bracket.low_rate * 100)} %:n portaassa. Vuoden {taxCalc.bracket.year}{' '}
-                      seuratut pääomatulot{' '}
-                      <span className="font-mono font-semibold text-foreground">€{eur(taxCalc.bracket.prior_ytd_income_eur)}</span>
-                      {' '}/ €{eur(taxCalc.bracket.threshold_eur)} — 30 %:n rajaan jäljellä{' '}
-                      <span className="font-mono font-semibold text-emerald-400">€{eur(taxCalc.bracket.headroom_before_sale_eur)}</span>.
-                    </p>
-                  </div>
-                </div>
-              )
-            )}
+            {taxCalc.bracket && <BracketCard b={taxCalc.bracket} />}
 
             {/* OmaVero Fields */}
             <div className="rounded-lg border-2 border-blue-500/30 bg-blue-500/5 p-4">
