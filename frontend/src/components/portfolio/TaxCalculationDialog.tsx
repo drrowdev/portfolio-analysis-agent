@@ -76,7 +76,6 @@ interface TaxCalculation {
     applies_high_rate: boolean;
     crosses_threshold: boolean;
     fully_above_threshold: boolean;
-    already_saved: boolean;
   };
   coverage?: {
     quantity_sold: number;

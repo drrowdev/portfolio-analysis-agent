@@ -420,13 +420,16 @@ async def trigger_dividend_check(
     }
 
 
-async def _year_capital_income(db: AsyncSession, year: int) -> cap_income.CapitalIncomeSummary:
+async def _year_capital_income(
+    db: AsyncSession, year: int, before_date: Optional[date] = None
+) -> cap_income.CapitalIncomeSummary:
     """Compute the tracked taxable capital-income summary for ``year``.
 
     Same data set as ``GET /capital-income-summary`` (all gain/dividend-relevant
     transactions across all years for full FIFO history; OST excluded inside the
-    service). Used by the tax-calculation endpoint to position a sale's gain on
-    the per-year 30 %/34 % bracket.
+    service). When ``before_date`` is given, only income realised strictly before
+    that date is counted — used to position a later sale's gain on the per-year
+    30 %/34 % bracket.
     """
     acc_result = await db.execute(select(Account))
     treatment_by_id = {str(a.id): a.tax_treatment.value for a in acc_result.scalars().all()}
@@ -458,7 +461,7 @@ async def _year_capital_income(db: AsyncSession, year: int) -> cap_income.Capita
         )
         for t in rows
     ]
-    return cap_income.compute_capital_income(txns, year)
+    return cap_income.compute_capital_income(txns, year, before_date)
 
 
 @router.get("/tax-calculation")
@@ -597,28 +600,15 @@ async def compute_tax_calculation(
 
     # --- Automatic 30 %/34 % bracket positioning -------------------------------
     # Position this sale's gain on the per-YEAR €30k bracket using the user's
-    # other tracked capital income (realized gains + 85% dividends, OST excluded)
-    # for the same calendar year. The tracked summary already includes this sale
-    # if it is a saved transaction, so subtract this sale's own gain to avoid
-    # double-counting; for a hypothetical (unsaved) sale nothing is subtracted.
+    # capital income realised EARLIER in the same calendar year (realized gains +
+    # 85% dividends, OST excluded) — i.e. income with a date strictly before this
+    # sale. Chronological stacking means the first sales of the year fill the 30 %
+    # band first; later sales cross into 34 %. A hypothetical (unsaved) sale is
+    # naturally excluded too, since nothing is dated on/after it.
     year = sell_date.year
-    year_summary = await _year_capital_income(db, year)
-    already_saved = await db.scalar(
-        select(func.count())
-        .select_from(Transaction)
-        .where(
-            Transaction.transaction_type.in_(
-                [TransactionType.sell, TransactionType.espp_sale]
-            ),
-            Transaction.symbol == symbol,
-            Transaction.date == sell_date,
-            Transaction.quantity == quantity,
-        )
-    )
+    prior_summary = await _year_capital_income(db, year, before_date=sell_date)
     gain = result.optimum_gain_eur
-    prior_income = year_summary.combined_taxable_eur
-    if already_saved:
-        prior_income = prior_income - gain
+    prior_income = prior_summary.combined_taxable_eur
 
     # Bracket-aware tax for this sale (marginal stacking on prior YTD income).
     tax_eur, effective_rate = tax_math.capital_gains_tax(gain, prior_income)
@@ -651,7 +641,6 @@ async def compute_tax_calculation(
         "applies_high_rate": applies_high_rate,
         "crosses_threshold": crosses_threshold,
         "fully_above_threshold": fully_above_threshold,
-        "already_saved": bool(already_saved),
     }
 
     # Annotate each consumed lot with the rate/method actually applied to it.

@@ -179,3 +179,39 @@ def test_prior_year_sales_excluded_but_feed_fifo():
     # Only the in-year sale counts: 5 * (200-100) = 500.
     assert s.taxable_gains_eur == Decimal("500")
     assert s.sale_count == 1
+
+
+def test_before_date_counts_only_earlier_income():
+    # before_date positions a sale: only income realised strictly before it
+    # counts, while later sells still consume FIFO lots correctly.
+    txns = [
+        _buy("acc1", "MSFT", date(2024, 1, 1), 30, 100),
+        _sell("acc1", "MSFT", date(YEAR, 1, 15), 10, 150),  # gain 500
+        _div("acc1", "MSFT", date(YEAR, 3, 1), 200),        # taxable 170
+        _sell("acc1", "MSFT", date(YEAR, 6, 1), 10, 200),   # gain 1000 (later)
+    ]
+    # Income strictly before the June sale: Jan gain 500 + March dividend 170.
+    prior = compute_capital_income(txns, YEAR, before_date=date(YEAR, 6, 1))
+    assert prior.combined_taxable_eur == Decimal("670")
+    assert prior.sale_count == 1
+
+    # Income strictly before the FIRST (Jan) sale: nothing yet.
+    first = compute_capital_income(txns, YEAR, before_date=date(YEAR, 1, 15))
+    assert first.combined_taxable_eur == Decimal("0")
+    assert first.sale_count == 0
+
+    # The later sale's gain is unaffected by the cutoff (FIFO still consumed):
+    # full year = 500 + 170 + 1000 = 1670.
+    full = compute_capital_income(txns, YEAR)
+    assert full.combined_taxable_eur == Decimal("1670")
+
+
+def test_before_date_excludes_same_day_sales():
+    # Sales on exactly before_date are NOT counted as prior (strictly-before).
+    txns = [
+        _buy("acc1", "MSFT", date(2024, 1, 1), 20, 100),
+        _sell("acc1", "MSFT", date(YEAR, 4, 1), 10, 150),  # same day as cutoff
+    ]
+    s = compute_capital_income(txns, YEAR, before_date=date(YEAR, 4, 1))
+    assert s.combined_taxable_eur == Decimal("0")
+    assert s.sale_count == 0

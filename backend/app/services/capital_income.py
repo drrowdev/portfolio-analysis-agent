@@ -90,12 +90,19 @@ class CapitalIncomeSummary:
     excluded_ost_sale_count: int = 0
 
 
-def _taxable_gains_for_year(txns: list[IncomeTxn], year: int) -> tuple[list[SaleGain], int]:
+def _taxable_gains_for_year(
+    txns: list[IncomeTxn], year: int, before_date: date | None = None
+) -> tuple[list[SaleGain], int]:
     """Per (account, symbol) FIFO best-of-olettama gains for sells in ``year``.
 
     OST (deferred) accounts are skipped entirely. Cost basis is per securities
     account, so lots from one account never satisfy sells in another.
     Returns (in-year taxable sales, count of skipped OST in-year sales).
+
+    When ``before_date`` is given, only sells dated **strictly before** it are
+    scored (FIFO lots are still consumed by every sell so the cost basis of the
+    earlier sales stays correct). This yields the capital income realised before
+    a given sale, used to position that sale on the per-year 30 %/34 % bracket.
     """
     groups: dict[tuple[str, str], list[IncomeTxn]] = {}
     for t in txns:
@@ -138,6 +145,9 @@ def _taxable_gains_for_year(txns: list[IncomeTxn], year: int) -> tuple[list[Sale
 
             if r.date.year != year:
                 continue
+            if before_date is not None and r.date >= before_date:
+                # Realised on/after the sale being positioned — not "prior".
+                continue
             if deferred:
                 excluded_ost += 1
                 continue
@@ -161,17 +171,20 @@ def _taxable_gains_for_year(txns: list[IncomeTxn], year: int) -> tuple[list[Sale
 
 
 def _dividends_for_year(
-    txns: list[IncomeTxn], year: int
+    txns: list[IncomeTxn], year: int, before_date: date | None = None
 ) -> tuple[list[DividendItem], Decimal, int]:
     """Aggregate taxable dividends (85% of gross) from non-OST accounts.
 
     Returns (per-symbol items, excluded OST gross dividends, OST payment count).
+    When ``before_date`` is given, only dividends paid strictly before it count.
     """
     by_symbol: dict[str, DividendItem] = {}
     excluded_ost_gross = Decimal("0")
 
     for t in txns:
         if t.txn_type != DIVIDEND_TYPE or t.date.year != year:
+            continue
+        if before_date is not None and t.date >= before_date:
             continue
         gross = t.total_eur or Decimal("0")
         if gross <= 0:
@@ -195,10 +208,16 @@ def _dividends_for_year(
     return items, excluded_ost_gross, 0
 
 
-def compute_capital_income(txns: list[IncomeTxn], year: int) -> CapitalIncomeSummary:
-    """Aggregate a year's taxable capital income and the 30/34% bracket position."""
-    sales, excluded_ost_sales = _taxable_gains_for_year(txns, year)
-    dividends, excluded_ost_div, _ = _dividends_for_year(txns, year)
+def compute_capital_income(
+    txns: list[IncomeTxn], year: int, before_date: date | None = None
+) -> CapitalIncomeSummary:
+    """Aggregate a year's taxable capital income and the 30/34% bracket position.
+
+    When ``before_date`` is given, only income realised strictly before that date
+    is counted (used to compute the prior YTD income a sale stacks on top of).
+    """
+    sales, excluded_ost_sales = _taxable_gains_for_year(txns, year, before_date)
+    dividends, excluded_ost_div, _ = _dividends_for_year(txns, year, before_date)
 
     taxable_gains = sum((s.gain_eur for s in sales), Decimal("0"))
     gross_div = sum((d.gross_eur for d in dividends), Decimal("0"))
