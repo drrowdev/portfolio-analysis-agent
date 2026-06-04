@@ -5,7 +5,7 @@ dividend transactions when new payments are detected.
 """
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 import yfinance as yf
@@ -14,12 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.holding import Holding
 from app.models.transaction import Transaction, TransactionType
+from app.services.dividend_logic import (
+    dedup_window,
+    recognition_decision,
+)
 from app.services.market_data import _yf_symbol
 
 logger = logging.getLogger(__name__)
-
-# How far back to look for dividends (covers payment delay after ex-date)
-LOOKBACK_DAYS = 30
 
 
 async def check_dividends(session: AsyncSession) -> int:
@@ -37,11 +38,11 @@ async def check_dividends(session: AsyncSession) -> int:
         return 0
 
     created = 0
-    cutoff = date.today() - timedelta(days=LOOKBACK_DAYS)
+    today = date.today()
 
     for holding in holdings:
         try:
-            new_divs = await _check_holding_dividends(session, holding, cutoff)
+            new_divs = await _check_holding_dividends(session, holding, today)
             created += new_divs
         except Exception:
             logger.exception(
@@ -54,40 +55,44 @@ async def check_dividends(session: AsyncSession) -> int:
 async def _check_holding_dividends(
     session: AsyncSession,
     holding: Holding,
-    cutoff: date,
+    today: date,
 ) -> int:
-    """Check a single holding for new dividends since cutoff date.
+    """Check a single holding for new, already-paid dividends.
 
     Returns number of new transactions created.
     """
     yf_symbol = _yf_symbol(holding.symbol)
     ticker = yf.Ticker(yf_symbol)
 
-    # Get dividend history
+    # Get dividend history (indexed by ex-dividend date; no pay date available)
     dividends = ticker.dividends
     if dividends.empty:
         return 0
 
     created = 0
-    today = date.today()
 
     for div_date_ts, amount_per_share in dividends.items():
-        div_date = div_date_ts.date()
+        ex_date = div_date_ts.date()
+        amount_per_share_dec = Decimal(str(amount_per_share))
 
-        # Only look at dividends within our window and not in the future
-        if div_date < cutoff or div_date > today:
+        # Gate on the estimated pay date: skip non-positive amounts, ex-dates
+        # outside the lookback window, and dividends not yet paid (declared but
+        # whose estimated pay date is still in the future).
+        pay_date = recognition_decision(ex_date, today, amount_per_share_dec)
+        if pay_date is None:
             continue
 
-        if amount_per_share <= 0:
-            continue
-
-        # Check if we already have this dividend recorded (deduplication)
+        # Deduplicate against any existing dividend near the estimated pay date
+        # (tolerant window absorbs the pay-date approximation and small date
+        # differences against manually imported rows).
+        win_start, win_end = dedup_window(pay_date)
         existing = await session.execute(
             select(Transaction).where(
                 and_(
                     Transaction.symbol == holding.symbol,
                     Transaction.transaction_type == TransactionType.dividend,
-                    Transaction.date == div_date,
+                    Transaction.date >= win_start,
+                    Transaction.date <= win_end,
                     Transaction.account_id == holding.account_id,
                 )
             )
@@ -97,7 +102,6 @@ async def _check_holding_dividends(
 
         # Calculate total dividend
         quantity = holding.total_quantity
-        amount_per_share_dec = Decimal(str(amount_per_share))
         total_native = amount_per_share_dec * quantity
 
         # For EUR-denominated holdings, native = EUR
@@ -123,7 +127,11 @@ async def _check_holding_dividends(
                     holding.symbol,
                 )
 
-        # Create the dividend transaction
+        # Create the dividend transaction. Quantity is stored as 0 to match the
+        # convention of manually imported dividend rows (a dividend is income,
+        # not a share movement); the per-share figure and share count are kept in
+        # the notes for traceability. The transaction date is the estimated pay
+        # date so the income lands in the correct (payment-year) tax bucket.
         transaction = Transaction(
             account_id=holding.account_id,
             symbol=holding.symbol,
@@ -131,26 +139,31 @@ async def _check_holding_dividends(
             instrument_name=holding.instrument_name,
             currency=currency,
             transaction_type=TransactionType.dividend,
-            date=div_date,
-            quantity=quantity,
-            price_native=amount_per_share_dec,
-            price_eur=amount_per_share_dec if currency == "EUR" else (amount_per_share_dec * fx_rate if fx_rate else amount_per_share_dec),
+            date=pay_date,
+            quantity=Decimal("0"),
+            price_native=total_native,
+            price_eur=total_eur,
             total_native=total_native,
             total_eur=total_eur,
             fx_rate=fx_rate,
             fees=Decimal("0"),
-            notes="Auto-detected from yfinance dividend data",
+            notes=(
+                f"Auto-detected from yfinance "
+                f"({amount_per_share_dec}/share × {quantity} sh, ex {ex_date})"
+            ),
         )
         session.add(transaction)
         created += 1
 
         logger.info(
-            "Auto-created dividend: %s paid %.4f/share × %s = %.2f EUR on %s",
+            "Auto-created dividend: %s paid %.4f/share × %s = %.2f EUR "
+            "(ex %s, est. pay %s)",
             holding.symbol,
             amount_per_share,
             quantity,
             total_eur,
-            div_date,
+            ex_date,
+            pay_date,
         )
 
     return created
