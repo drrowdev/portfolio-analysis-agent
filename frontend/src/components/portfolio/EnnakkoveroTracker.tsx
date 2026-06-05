@@ -176,15 +176,15 @@ export function EnnakkoveroTracker() {
                 OmaVero — vuosiyhteenveto {year}
               </p>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                <span className="text-muted-foreground">Luovutushinnat</span>
-                <span className="font-mono text-right">{mask(eur2(totProceeds))}</span>
-                <span className="text-muted-foreground">Hankintamenot</span>
+                <span className="text-muted-foreground">Hankintakulut yhteensä</span>
                 <span className="font-mono text-right">{mask(eur2(totAcquisition))}</span>
-                <span className="text-muted-foreground">Luovutusvoitot</span>
+                <span className="text-muted-foreground">Myyntihinnat yhteensä</span>
+                <span className="font-mono text-right">{mask(eur2(totProceeds))}</span>
+                <span className="text-muted-foreground">Luovutusvoitot yhteensä</span>
                 <span className="font-mono text-right text-red-400">{mask(eur2(totGain))}</span>
                 {totLoss > 0 && (
                   <>
-                    <span className="text-muted-foreground">Luovutustappiot</span>
+                    <span className="text-muted-foreground">Luovutustappiot yhteensä</span>
                     <span className="font-mono text-right text-emerald-400">{mask(eur2(totLoss))}</span>
                   </>
                 )}
@@ -239,10 +239,10 @@ export function EnnakkoveroTracker() {
                     </div>
                     {isOpen && (
                       <div className="ml-6 mb-1.5 mr-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs rounded bg-muted/40 p-2">
-                        <span className="text-muted-foreground">Luovutushinta</span>
-                        <span className="font-mono text-right">{mask(eur2(Number(s.proceeds_eur)))}</span>
-                        <span className="text-muted-foreground">Hankintameno</span>
+                        <span className="text-muted-foreground">Hankintakulut</span>
                         <span className="font-mono text-right">{mask(eur2(Number(s.acquisition_cost_eur)))}</span>
+                        <span className="text-muted-foreground">Myyntihinta</span>
+                        <span className="font-mono text-right">{mask(eur2(Number(s.proceeds_eur)))}</span>
                         {loss > 0 ? (
                           <>
                             <span className="text-muted-foreground">Luovutustappio</span>
