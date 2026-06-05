@@ -137,7 +137,14 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
             }
         )
 
-    over_under = total_paid - computed_for_paid  # >0 overpaid, <0 underpaid
+    over_under = total_paid - computed_for_paid  # >0 overpaid, <0 underpaid on declared sales
+
+    # Payment-aware year balance: the year's total liability is total_tax; net it
+    # against what has ACTUALLY been paid so far. An overpayment on an early sale
+    # therefore reduces what still needs to be paid to even out the full year
+    # (rather than paying the raw computed tax of every remaining sale on top).
+    remaining_to_pay = total_tax - total_paid  # signed: >0 still owe, <0 overpaid overall
+    year_balance = total_paid - total_tax  # >0 overpaid overall (refund), <0 still owe
 
     return {
         "year": year,
@@ -151,6 +158,10 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
         "total_paid_eur": _money(total_paid),
         "computed_for_paid_eur": _money(computed_for_paid),
         "over_under_eur": _money(over_under),
+        # Payment-aware remaining (nets actual payments against the year liability)
+        "remaining_to_pay_eur": _money(max(ZERO, remaining_to_pay)),
+        "year_balance_eur": _money(year_balance),
+        "overpaid_overall": year_balance > 0,
         "fully_declared": len(ordered) > 0 and declared_count == len(ordered),
         # OmaVero form-field totals for the year
         "total_proceeds_eur": _money(total_proceeds),

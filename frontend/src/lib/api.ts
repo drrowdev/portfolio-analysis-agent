@@ -260,6 +260,9 @@ export const api = {
       total_paid_eur: string;
       computed_for_paid_eur: string;
       over_under_eur: string;
+      remaining_to_pay_eur: string;
+      year_balance_eur: string;
+      overpaid_overall: boolean;
       fully_declared: boolean;
       total_proceeds_eur: string;
       total_acquisition_cost_eur: string;

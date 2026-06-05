@@ -61,6 +61,24 @@ def test_total_declared_remaining_split():
     assert s["total_paid_eur"] == "12313.38"
     assert s["over_under_eur"] == "1200.00"
     assert s["fully_declared"] is False
+    # Payment-aware remaining: full-year 18088.66 - paid 12313.38 = 5775.28
+    # (i.e. the 6975.28 raw computed of the two new sales LESS the 1200 overpaid).
+    assert s["remaining_to_pay_eur"] == "5775.28"
+    assert s["year_balance_eur"] == "-5775.28"
+    assert s["overpaid_overall"] is False
+
+
+def test_overpaid_overall_year_balance():
+    # Paid more than the whole year's liability -> remaining 0, refund expected.
+    sales = [
+        _sale("a", "2026-01-15", "1000.00", declared=True, paid="1500.00", paid_date="2026-02-01"),
+    ]
+    s = summarize_declarations(sales, year=2026, symbol="MSFT")
+    assert s["total_tax_eur"] == "1000.00"
+    assert s["total_paid_eur"] == "1500.00"
+    assert s["remaining_to_pay_eur"] == "0.00"
+    assert s["year_balance_eur"] == "500.00"
+    assert s["overpaid_overall"] is True
 
 
 def test_fully_declared_flag():

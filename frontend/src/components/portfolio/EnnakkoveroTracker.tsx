@@ -75,13 +75,15 @@ export function EnnakkoveroTracker() {
   }
 
   const total = Number(data?.total_tax_eur ?? 0);
-  const declared = Number(data?.declared_tax_eur ?? 0);
-  const remaining = Number(data?.remaining_tax_eur ?? 0);
+  const remainingToPay = Number(data?.remaining_to_pay_eur ?? 0);
+  const paid = Number(data?.total_paid_eur ?? 0);
+  const yearBalance = Number(data?.year_balance_eur ?? 0);
+  const overpaidOverall = data?.overpaid_overall ?? false;
   const overUnder = Number(data?.over_under_eur ?? 0);
   const paidCount = data?.paid_count ?? 0;
   const sales = data?.sales ?? [];
   const hasSales = sales.length > 0;
-  const declaredPct = total > 0 ? Math.min(100, (declared / total) * 100) : 0;
+  const paidPct = total > 0 ? Math.min(100, (paid / total) * 100) : 0;
 
   const totProceeds = Number(data?.total_proceeds_eur ?? 0);
   const totAcquisition = Number(data?.total_acquisition_cost_eur ?? 0);
@@ -119,40 +121,46 @@ export function EnnakkoveroTracker() {
           </p>
         ) : (
           <div className="space-y-3">
-            {/* Headline: remaining to declare */}
+            {/* Headline: remaining to PAY (nets actual payments vs year liability) */}
             <div className="flex items-baseline justify-between">
               <div>
-                <span className="text-2xl font-bold tabular-nums">{mask(eur2(remaining))}</span>
-                <span className="text-xs text-muted-foreground ml-2">still to declare</span>
+                <span className="text-2xl font-bold tabular-nums">{mask(eur2(remainingToPay))}</span>
+                <span className="text-xs text-muted-foreground ml-2">still to pay</span>
               </div>
               <span className="text-xs text-muted-foreground">
-                {mask(eur2(declared))} of {mask(eur2(total))} done
+                {mask(eur2(paid))} of {mask(eur2(total))} paid
               </span>
             </div>
 
-            {/* Progress: declared / total */}
+            {/* Progress: actually paid / total year liability */}
             <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
-                  remaining <= 0 ? 'bg-emerald-500' : 'bg-sky-500'
+                  remainingToPay <= 0 ? 'bg-emerald-500' : 'bg-sky-500'
                 }`}
-                style={{ width: `${declaredPct}%` }}
+                style={{ width: `${paidPct}%` }}
               />
             </div>
 
-            {remaining <= 0 ? (
+            {overpaidOverall ? (
               <p className="text-sm text-emerald-600 dark:text-emerald-500 flex items-center gap-1.5">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
-                All {year} MSFT sales declared.
+                Year over-covered — you've paid {mask(eur2(yearBalance))} more than the {year} total;
+                the assessment refunds the surplus.
+              </p>
+            ) : remainingToPay <= 0 ? (
+              <p className="text-sm text-emerald-600 dark:text-emerald-500 flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                {year} MSFT advance tax fully paid.
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{mask(eur2(remaining))}</span> of
-                advance tax still to declare/pay in OmaVero.
+                <span className="font-medium text-foreground">{mask(eur2(remainingToPay))}</span> still
+                to pay in OmaVero to even out the full {year} year.
               </p>
             )}
 
-            {/* Reconciliation: paid vs corrected computed figure */}
+            {/* Explain how prior over/under-payments net into the amount still to pay */}
             {paidCount > 0 && Math.abs(overUnder) >= 0.01 && (
               <div
                 className={`flex items-start gap-1.5 text-xs rounded-md p-2 ${
@@ -163,9 +171,11 @@ export function EnnakkoveroTracker() {
               >
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>
-                  For declared sales you paid {mask(eur2(Math.abs(overUnder)))}{' '}
-                  {overUnder > 0 ? 'more' : 'less'} than the corrected figure. The year-end
-                  assessment reconciles {overUnder > 0 ? 'the overpayment (refunded)' : 'the shortfall (residual tax)'}.
+                  You've already paid {mask(eur2(Math.abs(overUnder)))}{' '}
+                  {overUnder > 0 ? 'more' : 'less'} than the corrected tax on declared sales. That{' '}
+                  {overUnder > 0 ? 'surplus reduces' : 'shortfall is added to'} the amount still to
+                  pay above, so you {overUnder > 0 ? 'can pay less' : 'need to pay more'} to even out
+                  the year — no excess.
                 </span>
               </div>
             )}
