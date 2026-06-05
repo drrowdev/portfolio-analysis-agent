@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import {
@@ -10,8 +10,15 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Calculator, Info, CheckCircle2, Download, Save, AlertTriangle } from 'lucide-react';
+import { FileText, Calculator, Info, CheckCircle2, Download, Save, AlertTriangle, Receipt } from 'lucide-react';
 import { toast } from '@/hooks/useToast';
+
+interface SavedCalcMeta {
+  id: string;
+  declared: boolean;
+  paid_amount_eur: string | null;
+  paid_date: string | null;
+}
 
 interface TaxCalculationDialogProps {
   open: boolean;
@@ -23,6 +30,8 @@ interface TaxCalculationDialogProps {
     sell_date: string;
     fees_eur: number;
   } | null;
+  /** The saved calculation for this sale (if one exists), for declaration tracking. */
+  existingCalc?: SavedCalcMeta | null;
 }
 
 interface TaxLot {
@@ -226,7 +235,7 @@ function BracketCard({ b }: { b: Bracket }) {
   );
 }
 
-export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalculationDialogProps) {
+export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingCalc }: TaxCalculationDialogProps) {
   const [savedId, setSavedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -264,6 +273,7 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
       setSavedId(data.id);
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
       queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
       toast({ title: 'Saved', description: 'Tax calculation stored successfully.' });
     },
     onError: (err) => {
@@ -276,6 +286,55 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
     const url = api.getTaxCalculationPdfUrl(savedId);
     window.open(url, '_blank');
   };
+
+  // --- Declaration / paid tracking ------------------------------------------
+  const effectiveId = savedId ?? existingCalc?.id ?? null;
+  const computedTax = taxCalc?.omavero.veron_maara ?? 0;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [declChecked, setDeclChecked] = useState(false);
+  const [paidAmount, setPaidAmount] = useState('');
+  const [paidDate, setPaidDate] = useState(today);
+
+  // Sync the declaration form whenever the dialog opens on a different sale or
+  // its saved declaration state changes.
+  useEffect(() => {
+    if (!open) return;
+    const declared = existingCalc?.declared ?? false;
+    setDeclChecked(declared);
+    setPaidAmount(
+      existingCalc?.paid_amount_eur ??
+        (computedTax ? computedTax.toFixed(2) : '')
+    );
+    setPaidDate(existingCalc?.paid_date ?? today);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, existingCalc?.id, existingCalc?.declared, existingCalc?.paid_amount_eur, existingCalc?.paid_date, computedTax]);
+
+  const declMutation = useMutation({
+    mutationFn: async () => {
+      if (!effectiveId) throw new Error('Save the calculation first');
+      return api.setTaxCalculationDeclaration(effectiveId, {
+        declared: declChecked,
+        paid_amount_eur: declChecked ? (paidAmount || computedTax.toFixed(2)) : null,
+        paid_date: declChecked ? paidDate : null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
+      toast({
+        title: declChecked ? 'Marked declared' : 'Cleared',
+        description: declChecked
+          ? 'Saved as declared & paid.'
+          : 'Declaration cleared.',
+      });
+    },
+    onError: (err) =>
+      toast({ title: 'Error', description: (err as Error).message, variant: 'destructive' }),
+  });
+
+  const paidNum = Number(paidAmount || 0);
+  const diffVsComputed = paidNum - computedTax;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -493,6 +552,82 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams }: TaxCalc
                 <Download className="h-4 w-4 mr-1" />
                 Download PDF
               </Button>
+            </div>
+
+            {/* Declaration / paid tracking */}
+            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Receipt className="h-4 w-4 text-muted-foreground" />
+                Ennakkovero — ilmoitus & maksu
+              </h3>
+
+              {!effectiveId ? (
+                <p className="text-xs text-muted-foreground">
+                  Tallenna laskelma ensin, niin voit merkitä sen ilmoitetuksi ja maksetuksi.
+                </p>
+              ) : (
+                <>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={declChecked}
+                      onChange={(e) => setDeclChecked(e.target.checked)}
+                      className="h-4 w-4 rounded border-border accent-emerald-500"
+                    />
+                    Ennakkovero ilmoitettu ja maksettu OmaVerossa
+                  </label>
+
+                  {declChecked && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Maksettu määrä (€)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={paidAmount}
+                          onChange={(e) => setPaidAmount(e.target.value)}
+                          className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-mono"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Maksupäivä</label>
+                        <input
+                          type="date"
+                          value={paidDate}
+                          onChange={(e) => setPaidDate(e.target.value)}
+                          className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {declChecked && Math.abs(diffVsComputed) >= 0.01 && (
+                    <p
+                      className={`text-xs ${
+                        diffVsComputed > 0 ? 'text-amber-400' : 'text-red-400'
+                      }`}
+                    >
+                      {diffVsComputed > 0 ? 'Maksoit' : 'Maksoit'} €{eur(Math.abs(diffVsComputed))}{' '}
+                      {diffVsComputed > 0 ? 'enemmän' : 'vähemmän'} kuin laskettu ennakkovero
+                      (€{eur(computedTax)}). Verotuksen lopullinen tasaus huomioi erotuksen.
+                    </p>
+                  )}
+
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => declMutation.mutate()}
+                    disabled={declMutation.isPending}
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-1" />
+                    {declMutation.isPending
+                      ? 'Tallennetaan…'
+                      : declChecked
+                        ? 'Tallenna ilmoitus'
+                        : 'Poista merkintä'}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         )}

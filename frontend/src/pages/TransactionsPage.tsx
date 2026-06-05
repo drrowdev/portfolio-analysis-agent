@@ -11,6 +11,7 @@ import { formatCurrency } from '@/lib/utils';
 import { usePrivacy } from '@/contexts/PrivacyContext';
 import { TaxCalculationDialog } from '@/components/portfolio/TaxCalculationDialog';
 import { CapitalGainsTracker } from '@/components/portfolio/CapitalGainsTracker';
+import { EnnakkoveroTracker } from '@/components/portfolio/EnnakkoveroTracker';
 import {
   ArrowDownCircle,
   ArrowUpCircle,
@@ -114,6 +115,19 @@ export function TransactionsPage() {
       .filter((tc: { transaction_id: string | null }) => tc.transaction_id)
       .map((tc: { transaction_id: string | null; id: string }) => [tc.transaction_id, tc.id])
   );
+  const taxCalcMetaByTxId = new Map(
+    taxCalcs
+      .filter((tc) => tc.transaction_id)
+      .map((tc) => [
+        tc.transaction_id as string,
+        {
+          id: tc.id,
+          declared: tc.declared,
+          paid_amount_eur: tc.paid_amount_eur,
+          paid_date: tc.paid_date,
+        },
+      ])
+  );
 
   const queryClient = useQueryClient();
 
@@ -122,6 +136,7 @@ export function TransactionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
       queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
       toast({ title: 'Tax calculation deleted' });
     },
     onError: (e: unknown) =>
@@ -137,6 +152,7 @@ export function TransactionsPage() {
     onSuccess: (res: { deleted: number }) => {
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
       queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
       toast({ title: `Deleted ${res.deleted} saved tax calculation${res.deleted !== 1 ? 's' : ''}` });
     },
     onError: (e: unknown) =>
@@ -165,6 +181,7 @@ export function TransactionsPage() {
 
   // State for opening tax calc from transaction row
   const [taxDialogOpen, setTaxDialogOpen] = useState(false);
+  const [taxTxId, setTaxTxId] = useState<string | null>(null);
   const [taxSellParams, setTaxSellParams] = useState<{
     symbol: string;
     quantity: number;
@@ -226,7 +243,10 @@ export function TransactionsPage() {
         </div>
       </div>
 
-      <CapitalGainsTracker />
+      <div className="grid gap-4 md:grid-cols-2">
+        <CapitalGainsTracker />
+        <EnnakkoveroTracker />
+      </div>
 
       {showFilters && (
         <Card>
@@ -374,6 +394,7 @@ export function TransactionsPage() {
                               className={`p-1 rounded hover:bg-accent ${taxCalcByTxId.has(tx.id) ? 'text-blue-400' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
                               title={taxCalcByTxId.has(tx.id) ? 'View tax calculation' : 'Calculate tax'}
                               onClick={() => {
+                                setTaxTxId(tx.id);
                                 setTaxSellParams({
                                   symbol: tx.symbol,
                                   quantity: Number(tx.quantity),
@@ -441,6 +462,7 @@ export function TransactionsPage() {
         open={taxDialogOpen}
         onOpenChange={setTaxDialogOpen}
         sellParams={taxSellParams}
+        existingCalc={taxTxId ? taxCalcMetaByTxId.get(taxTxId) ?? null : null}
       />
     </div>
   );

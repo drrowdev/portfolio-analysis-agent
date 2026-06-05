@@ -42,6 +42,9 @@ async def init_db() -> None:
             ("holdings", "market_state", "VARCHAR(20)"),
             ("holdings", "extended_hours_price", "NUMERIC"),
             ("holdings", "extended_hours_change_pct", "NUMERIC"),
+            ("tax_calculations", "declared_at", "TIMESTAMP"),
+            ("tax_calculations", "paid_amount_eur", "VARCHAR(30)"),
+            ("tax_calculations", "paid_date", "DATE"),
         ]
         for table, column, col_type in migrations:
             await conn.execute(text(

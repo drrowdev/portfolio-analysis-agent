@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Optional
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.tax_calculation import TaxCalculation
 from app.models.transaction import Transaction, TransactionType
+from app.services import declarations as decl
 from app.services import tax as tax_math  # noqa: F401  (kept for potential reuse)
 
 router = APIRouter(prefix="/transactions/tax-calculations", tags=["tax-calculations"])
@@ -41,8 +42,19 @@ class TaxCalculationRead(BaseModel):
     fees_eur: str
     calculation_json: dict
     created_at: str
+    declared: bool = False
+    declared_at: Optional[str] = None
+    paid_amount_eur: Optional[str] = None
+    paid_date: Optional[date] = None
 
     model_config = {"from_attributes": True}
+
+
+class DeclarationUpdate(BaseModel):
+    """Mark a saved calculation as declared/paid (or clear it)."""
+    declared: bool
+    paid_amount_eur: Optional[str] = None
+    paid_date: Optional[date] = None
 
 
 @router.post("/", response_model=TaxCalculationRead, status_code=201)
@@ -127,6 +139,74 @@ async def list_tax_calculations(
 
     result = await db.execute(stmt)
     return [_to_read(tc) for tc in result.scalars().all()]
+
+
+@router.get("/declaration-summary")
+async def declaration_summary(
+    year: int = Query(..., description="Calendar year to summarise"),
+    symbol: str = Query("MSFT", description="Symbol to summarise (MSFT is the only filed symbol)"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Summarise ennakkovero declaration status for a year.
+
+    Returns the total advance tax across the year's saved per-sale calculations,
+    split into already-declared vs still-to-declare, plus a paid-vs-computed
+    reconciliation for the sales the user has actually paid. The per-sale figures
+    are marginal and stack chronologically, so they sum to the year's total.
+    """
+    stmt = (
+        select(TaxCalculation)
+        .where(TaxCalculation.symbol == symbol)
+        .where(TaxCalculation.sell_date >= date(year, 1, 1))
+        .where(TaxCalculation.sell_date <= date(year, 12, 31))
+    )
+    result = await db.execute(stmt)
+    rows = list(result.scalars().all())
+
+    sales = [
+        decl.DeclarationSale(
+            id=str(tc.id),
+            sell_date=tc.sell_date,
+            quantity_sold=tc.quantity_sold,
+            computed_tax_eur=decl.per_sale_tax(json.loads(tc.calculation_json)),
+            declared=tc.declared_at is not None,
+            declared_at=tc.declared_at.isoformat() if tc.declared_at else None,
+            paid_amount_eur=Decimal(tc.paid_amount_eur) if tc.paid_amount_eur else None,
+            paid_date=tc.paid_date,
+        )
+        for tc in rows
+    ]
+    return decl.summarize_declarations(sales, year=year, symbol=symbol)
+
+
+@router.patch("/{calc_id}/declaration", response_model=TaxCalculationRead)
+async def update_declaration(
+    calc_id: str,
+    payload: DeclarationUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mark a saved calculation as declared/paid, or clear its declaration."""
+    result = await db.execute(
+        select(TaxCalculation).where(TaxCalculation.id == uuid.UUID(calc_id))
+    )
+    calc = result.scalar_one_or_none()
+    if calc is None:
+        raise HTTPException(status_code=404, detail="Tax calculation not found")
+
+    if payload.declared:
+        # Preserve an existing declared_at if it was already set.
+        if calc.declared_at is None:
+            calc.declared_at = datetime.utcnow()
+        calc.paid_amount_eur = payload.paid_amount_eur
+        calc.paid_date = payload.paid_date
+    else:
+        calc.declared_at = None
+        calc.paid_amount_eur = None
+        calc.paid_date = None
+
+    await db.commit()
+    await db.refresh(calc)
+    return _to_read(calc)
 
 
 @router.delete("/", status_code=200)
@@ -232,6 +312,10 @@ def _to_read(tc: TaxCalculation) -> TaxCalculationRead:
         fees_eur=tc.fees_eur,
         calculation_json=json.loads(tc.calculation_json),
         created_at=tc.created_at.isoformat(),
+        declared=tc.declared_at is not None,
+        declared_at=tc.declared_at.isoformat() if tc.declared_at else None,
+        paid_amount_eur=tc.paid_amount_eur,
+        paid_date=tc.paid_date,
     )
 
 

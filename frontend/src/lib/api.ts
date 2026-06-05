@@ -224,10 +224,54 @@ export const api = {
     if (params?.symbol) query.set('symbol', params.symbol);
     if (params?.year) query.set('year', String(params.year));
     const qs = query.toString();
-    return request<{ id: string; transaction_id: string | null; symbol: string; sell_date: string }[]>(
-      `/transactions/tax-calculations/${qs ? '?' + qs : ''}`
-    );
+    return request<
+      {
+        id: string;
+        transaction_id: string | null;
+        symbol: string;
+        sell_date: string;
+        declared: boolean;
+        declared_at: string | null;
+        paid_amount_eur: string | null;
+        paid_date: string | null;
+      }[]
+    >(`/transactions/tax-calculations/${qs ? '?' + qs : ''}`);
   },
+
+  setTaxCalculationDeclaration: (
+    id: string,
+    body: { declared: boolean; paid_amount_eur?: string | null; paid_date?: string | null }
+  ) =>
+    request<{ id: string; declared: boolean; paid_amount_eur: string | null; paid_date: string | null }>(
+      `/transactions/tax-calculations/${id}/declaration`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    ),
+
+  getDeclarationSummary: (year: number, symbol = 'MSFT') =>
+    request<{
+      year: number;
+      symbol: string;
+      sale_count: number;
+      declared_count: number;
+      paid_count: number;
+      total_tax_eur: string;
+      declared_tax_eur: string;
+      remaining_tax_eur: string;
+      total_paid_eur: string;
+      computed_for_paid_eur: string;
+      over_under_eur: string;
+      fully_declared: boolean;
+      sales: {
+        id: string;
+        sell_date: string;
+        quantity_sold: string;
+        computed_tax_eur: string;
+        declared: boolean;
+        declared_at: string | null;
+        paid_amount_eur: string | null;
+        paid_date: string | null;
+      }[];
+    }>(`/transactions/tax-calculations/declaration-summary?year=${year}&symbol=${symbol}`),
 
   getTaxCalculation: (id: string) =>
     request<{ id: string; calculation_json: Record<string, unknown> }>(`/transactions/tax-calculations/${id}`),
