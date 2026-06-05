@@ -390,9 +390,24 @@ export function TransactionsPage() {
                         {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') &&
                           TAX_FILING_SYMBOLS.has(tx.symbol) && (
                           <div className="flex items-center gap-0.5">
+                            {(() => {
+                              const meta = taxCalcMetaByTxId.get(tx.id);
+                              const saved = !!meta;
+                              const declared = !!meta?.declared;
+                              const color = declared
+                                ? 'text-emerald-400'
+                                : saved
+                                  ? 'text-amber-400'
+                                  : 'text-muted-foreground/40 hover:text-muted-foreground';
+                              const title = declared
+                                ? 'Tax declared & paid — view calculation'
+                                : saved
+                                  ? 'Saved but not yet declared/paid — view calculation'
+                                  : 'Calculate tax';
+                              return (
                             <button
-                              className={`p-1 rounded hover:bg-accent ${taxCalcByTxId.has(tx.id) ? 'text-blue-400' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
-                              title={taxCalcByTxId.has(tx.id) ? 'View tax calculation' : 'Calculate tax'}
+                              className={`p-1 rounded hover:bg-accent ${color}`}
+                              title={title}
                               onClick={() => {
                                 setTaxTxId(tx.id);
                                 setTaxSellParams({
@@ -407,6 +422,8 @@ export function TransactionsPage() {
                             >
                               <FileText className="h-4 w-4" />
                             </button>
+                              );
+                            })()}
                             {taxCalcByTxId.has(tx.id) && (
                               <button
                                 className="p-1 rounded text-muted-foreground/40 hover:text-red-400 hover:bg-accent"
