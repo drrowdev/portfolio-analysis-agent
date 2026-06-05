@@ -261,6 +261,10 @@ export const api = {
       computed_for_paid_eur: string;
       over_under_eur: string;
       fully_declared: boolean;
+      total_proceeds_eur: string;
+      total_acquisition_cost_eur: string;
+      total_gain_eur: string;
+      total_loss_eur: string;
       sales: {
         id: string;
         sell_date: string;
@@ -270,6 +274,10 @@ export const api = {
         declared_at: string | null;
         paid_amount_eur: string | null;
         paid_date: string | null;
+        proceeds_eur: string;
+        acquisition_cost_eur: string;
+        gain_eur: string;
+        loss_eur: string;
       }[];
     }>(`/transactions/tax-calculations/declaration-summary?year=${year}&symbol=${symbol}`),
 

@@ -163,19 +163,25 @@ async def declaration_summary(
     result = await db.execute(stmt)
     rows = list(result.scalars().all())
 
-    sales = [
-        decl.DeclarationSale(
-            id=str(tc.id),
-            sell_date=tc.sell_date,
-            quantity_sold=tc.quantity_sold,
-            computed_tax_eur=decl.per_sale_tax(json.loads(tc.calculation_json)),
-            declared=tc.declared_at is not None,
-            declared_at=tc.declared_at.isoformat() if tc.declared_at else None,
-            paid_amount_eur=Decimal(tc.paid_amount_eur) if tc.paid_amount_eur else None,
-            paid_date=tc.paid_date,
+    sales = []
+    for tc in rows:
+        cj = json.loads(tc.calculation_json)
+        ov = decl.omavero_fields(cj)
+        sales.append(
+            decl.DeclarationSale(
+                id=str(tc.id),
+                sell_date=tc.sell_date,
+                quantity_sold=tc.quantity_sold,
+                computed_tax_eur=decl.per_sale_tax(cj),
+                declared=tc.declared_at is not None,
+                declared_at=tc.declared_at.isoformat() if tc.declared_at else None,
+                paid_amount_eur=Decimal(tc.paid_amount_eur) if tc.paid_amount_eur else None,
+                paid_date=tc.paid_date,
+                proceeds_eur=ov["proceeds"],
+                acquisition_cost_eur=ov["acquisition"],
+                gain_eur=ov["gain"],
+            )
         )
-        for tc in rows
-    ]
     return decl.summarize_declarations(sales, year=year, symbol=symbol)
 
 

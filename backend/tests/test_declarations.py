@@ -5,12 +5,14 @@ from decimal import Decimal
 
 from app.services.declarations import (
     DeclarationSale,
+    omavero_fields,
     per_sale_tax,
     summarize_declarations,
 )
 
 
-def _sale(id, d, tax, declared=False, paid=None, paid_date=None):
+def _sale(id, d, tax, declared=False, paid=None, paid_date=None,
+          proceeds="0", acquisition="0", gain="0"):
     return DeclarationSale(
         id=id,
         sell_date=date.fromisoformat(d),
@@ -20,6 +22,9 @@ def _sale(id, d, tax, declared=False, paid=None, paid_date=None):
         declared_at="2026-02-15T00:00:00" if declared else None,
         paid_amount_eur=Decimal(str(paid)) if paid is not None else None,
         paid_date=date.fromisoformat(paid_date) if paid_date else None,
+        proceeds_eur=Decimal(str(proceeds)),
+        acquisition_cost_eur=Decimal(str(acquisition)),
+        gain_eur=Decimal(str(gain)),
     )
 
 
@@ -87,3 +92,44 @@ def test_sales_sorted_by_date():
     ]
     s = summarize_declarations(sales, year=2026, symbol="MSFT")
     assert [row["id"] for row in s["sales"]] == ["early", "late"]
+
+
+def test_omavero_fields_extraction():
+    cj = {
+        "omavero": {
+            "luovutushinta": 19762.46,
+            "hankintameno_kaytetty": 5129.29,
+            "luovutusvoitto": 14633.17,
+        }
+    }
+    f = omavero_fields(cj)
+    assert f["proceeds"] == Decimal("19762.46")
+    assert f["acquisition"] == Decimal("5129.29")
+    assert f["gain"] == Decimal("14633.17")
+
+
+def test_omavero_fields_fallback_acquisition():
+    # No explicit hankintameno_kaytetty -> derive as proceeds - gain.
+    cj = {"omavero": {"luovutushinta": 100, "luovutusvoitto": 40}}
+    f = omavero_fields(cj)
+    assert f["acquisition"] == Decimal("60")
+
+
+def test_form_field_totals_and_loss_split():
+    sales = [
+        _sale("a", "2026-01-15", "1000.00", proceeds="20000", acquisition="5000", gain="15000"),
+        _sale("b", "2026-06-01", "0.00", proceeds="3000", acquisition="4000", gain="-1000"),
+    ]
+    s = summarize_declarations(sales, year=2026, symbol="MSFT")
+    assert s["total_proceeds_eur"] == "23000.00"
+    assert s["total_acquisition_cost_eur"] == "9000.00"
+    assert s["total_gain_eur"] == "15000.00"
+    assert s["total_loss_eur"] == "1000.00"
+    # Per-sale: the loss row exposes loss, zero gain.
+    loss_row = next(r for r in s["sales"] if r["id"] == "b")
+    assert loss_row["gain_eur"] == "0.00"
+    assert loss_row["loss_eur"] == "1000.00"
+    gain_row = next(r for r in s["sales"] if r["id"] == "a")
+    assert gain_row["gain_eur"] == "15000.00"
+    assert gain_row["loss_eur"] == "0.00"
+

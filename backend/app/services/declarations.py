@@ -31,6 +31,10 @@ class DeclarationSale:
     declared_at: Optional[str] = None
     paid_amount_eur: Optional[Decimal] = None
     paid_date: Optional[date] = None
+    # OmaVero form fields for this sale (for filling the annual return).
+    proceeds_eur: Decimal = ZERO  # Luovutushinta / myyntihinta
+    acquisition_cost_eur: Decimal = ZERO  # Hankintameno (käytetty vähennys)
+    gain_eur: Decimal = ZERO  # Luovutusvoitto (>0) tai -tappio (<0)
 
 
 def per_sale_tax(calculation_json: dict) -> Decimal:
@@ -43,6 +47,31 @@ def per_sale_tax(calculation_json: dict) -> Decimal:
         return Decimal(str(calculation_json["omavero"]["veron_maara"]))
     except (KeyError, TypeError, ValueError, ArithmeticError):
         return ZERO
+
+
+def _omavero_decimal(calculation_json: dict, key: str) -> Decimal:
+    """Read a numeric OmaVero field from a stored calculation (0 on failure)."""
+    try:
+        return Decimal(str(calculation_json["omavero"][key]))
+    except (KeyError, TypeError, ValueError, ArithmeticError):
+        return ZERO
+
+
+def omavero_fields(calculation_json: dict) -> dict:
+    """Extract the OmaVero form fields (proceeds, acquisition cost, gain) for a sale."""
+    proceeds = _omavero_decimal(calculation_json, "luovutushinta")
+    gain = _omavero_decimal(calculation_json, "luovutusvoitto")
+    # Prefer the explicit "used deduction"; fall back to proceeds − gain so the
+    # three numbers always reconcile even for older saved calculations.
+    used = calculation_json.get("omavero", {}).get("hankintameno_kaytetty")
+    if used is not None:
+        try:
+            acquisition = Decimal(str(used))
+        except (TypeError, ValueError, ArithmeticError):
+            acquisition = proceeds - gain
+    else:
+        acquisition = proceeds - gain
+    return {"proceeds": proceeds, "acquisition": acquisition, "gain": gain}
 
 
 def _money(value) -> str:
@@ -63,6 +92,12 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
     declared_count = 0
     paid_count = 0
 
+    # OmaVero form-field totals for the year.
+    total_proceeds = ZERO  # Luovutushinnat
+    total_acquisition = ZERO  # Hankintamenot
+    total_gain = ZERO  # Luovutusvoitot (positive sales only)
+    total_loss = ZERO  # Luovutustappiot (magnitude of negative sales)
+
     ordered = sorted(sales, key=lambda s: (s.sell_date, s.id))
     sale_rows = []
     for s in ordered:
@@ -77,6 +112,13 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
         else:
             remaining_tax += s.computed_tax_eur
 
+        total_proceeds += s.proceeds_eur
+        total_acquisition += s.acquisition_cost_eur
+        if s.gain_eur >= 0:
+            total_gain += s.gain_eur
+        else:
+            total_loss += -s.gain_eur
+
         sale_rows.append(
             {
                 "id": s.id,
@@ -87,6 +129,11 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
                 "declared_at": s.declared_at,
                 "paid_amount_eur": _money(s.paid_amount_eur) if s.paid_amount_eur is not None else None,
                 "paid_date": s.paid_date.isoformat() if s.paid_date else None,
+                # OmaVero form fields
+                "proceeds_eur": _money(s.proceeds_eur),
+                "acquisition_cost_eur": _money(s.acquisition_cost_eur),
+                "gain_eur": _money(s.gain_eur) if s.gain_eur >= 0 else "0.00",
+                "loss_eur": _money(-s.gain_eur) if s.gain_eur < 0 else "0.00",
             }
         )
 
@@ -105,5 +152,10 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
         "computed_for_paid_eur": _money(computed_for_paid),
         "over_under_eur": _money(over_under),
         "fully_declared": len(ordered) > 0 and declared_count == len(ordered),
+        # OmaVero form-field totals for the year
+        "total_proceeds_eur": _money(total_proceeds),
+        "total_acquisition_cost_eur": _money(total_acquisition),
+        "total_gain_eur": _money(total_gain),
+        "total_loss_eur": _money(total_loss),
         "sales": sale_rows,
     }
