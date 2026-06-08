@@ -20,9 +20,12 @@ import {
   Coins,
   FileText,
   Filter,
+  Pencil,
   Trash2,
   X,
 } from 'lucide-react';
+import { EditTransactionDialog } from '@/components/portfolio/EditTransactionDialog';
+import type { Transaction } from '@/types/portfolio';
 
 const PAGE_SIZE = 50;
 
@@ -189,6 +192,35 @@ export function TransactionsPage() {
     sell_date: string;
     fees_eur: number;
   } | null>(null);
+
+  // Edit dialog state
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTx, setEditTx] = useState<Transaction | null>(null);
+
+  const deleteTx = useMutation({
+    mutationFn: (id: string) => api.deleteTransaction(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions-count'] });
+      queryClient.invalidateQueries({ queryKey: ['holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['portfolio'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      toast({ title: 'Transaction deleted' });
+    },
+    onError: (e: unknown) =>
+      toast({
+        title: 'Failed to delete transaction',
+        description: e instanceof Error ? e.message : String(e),
+        variant: 'destructive',
+      }),
+  });
+
+  function handleDeleteTx(tx: Transaction) {
+    const label = `${tx.transaction_type.toUpperCase()} ${tx.quantity} × ${tx.symbol} on ${new Date(tx.date).toLocaleDateString('fi-FI')}`;
+    if (window.confirm(`Delete this transaction?\n\n${label}\n\nHoldings will be recomputed automatically.`)) {
+      deleteTx.mutate(tx.id);
+    }
+  }
 
   const totalCount = countData?.count ?? 0;
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
@@ -387,55 +419,75 @@ export function TransactionsPage() {
                         {tx.fx_rate ? tx.fx_rate.toFixed(4) : '—'}
                       </td>
                       <td className="py-2 px-1">
-                        {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') &&
-                          TAX_FILING_SYMBOLS.has(tx.symbol) && (
-                          <div className="flex items-center gap-0.5">
-                            {(() => {
-                              const meta = taxCalcMetaByTxId.get(tx.id);
-                              const saved = !!meta;
-                              const declared = !!meta?.declared;
-                              const color = declared
-                                ? 'text-emerald-400'
-                                : saved
-                                  ? 'text-amber-400'
-                                  : 'text-muted-foreground/40 hover:text-muted-foreground';
-                              const title = declared
-                                ? 'Tax declared & paid — view calculation'
-                                : saved
-                                  ? 'Saved but not yet declared/paid — view calculation'
-                                  : 'Calculate tax';
-                              return (
-                            <button
-                              className={`p-1 rounded hover:bg-accent ${color}`}
-                              title={title}
-                              onClick={() => {
-                                setTaxTxId(tx.id);
-                                setTaxSellParams({
-                                  symbol: tx.symbol,
-                                  quantity: Number(tx.quantity),
-                                  sell_price_eur: Number(tx.price_eur),
-                                  sell_date: tx.date,
-                                  fees_eur: Number(tx.fees),
-                                });
-                                setTaxDialogOpen(true);
-                              }}
-                            >
-                              <FileText className="h-4 w-4" />
-                            </button>
-                              );
-                            })()}
-                            {taxCalcByTxId.has(tx.id) && (
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            className="p-1 rounded text-muted-foreground/40 hover:text-foreground hover:bg-accent"
+                            title="Edit transaction"
+                            onClick={() => {
+                              setEditTx(tx);
+                              setEditOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            className="p-1 rounded text-muted-foreground/40 hover:text-red-400 hover:bg-accent"
+                            title="Delete transaction"
+                            disabled={deleteTx.isPending}
+                            onClick={() => handleDeleteTx(tx)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                          {(tx.transaction_type === 'sell' || tx.transaction_type === 'espp_sale') &&
+                            TAX_FILING_SYMBOLS.has(tx.symbol) && (
+                            <>
+                              {(() => {
+                                const meta = taxCalcMetaByTxId.get(tx.id);
+                                const saved = !!meta;
+                                const declared = !!meta?.declared;
+                                const color = declared
+                                  ? 'text-emerald-400'
+                                  : saved
+                                    ? 'text-amber-400'
+                                    : 'text-muted-foreground/40 hover:text-muted-foreground';
+                                const title = declared
+                                  ? 'Tax declared & paid — view calculation'
+                                  : saved
+                                    ? 'Saved but not yet declared/paid — view calculation'
+                                    : 'Calculate tax';
+                                return (
                               <button
-                                className="p-1 rounded text-muted-foreground/40 hover:text-red-400 hover:bg-accent"
-                                title="Delete saved tax calculation"
-                                disabled={deleteOneCalc.isPending}
-                                onClick={() => handleDeleteOneCalc(taxCalcByTxId.get(tx.id) as string)}
+                                className={`p-1 rounded hover:bg-accent ${color}`}
+                                title={title}
+                                onClick={() => {
+                                  setTaxTxId(tx.id);
+                                  setTaxSellParams({
+                                    symbol: tx.symbol,
+                                    quantity: Number(tx.quantity),
+                                    sell_price_eur: Number(tx.price_eur),
+                                    sell_date: tx.date,
+                                    fees_eur: Number(tx.fees),
+                                  });
+                                  setTaxDialogOpen(true);
+                                }}
                               >
-                                <Trash2 className="h-4 w-4" />
+                                <FileText className="h-4 w-4" />
                               </button>
-                            )}
-                          </div>
-                        )}
+                                );
+                              })()}
+                              {taxCalcByTxId.has(tx.id) && (
+                                <button
+                                  className="p-1 rounded text-muted-foreground/40 hover:text-red-400 hover:bg-accent"
+                                  title="Delete saved tax calculation"
+                                  disabled={deleteOneCalc.isPending}
+                                  onClick={() => handleDeleteOneCalc(taxCalcByTxId.get(tx.id) as string)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -480,6 +532,12 @@ export function TransactionsPage() {
         onOpenChange={setTaxDialogOpen}
         sellParams={taxSellParams}
         existingCalc={taxTxId ? taxCalcMetaByTxId.get(taxTxId) ?? null : null}
+      />
+
+      <EditTransactionDialog
+        transaction={editTx}
+        open={editOpen}
+        onOpenChange={setEditOpen}
       />
     </div>
   );

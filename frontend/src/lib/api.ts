@@ -234,6 +234,30 @@ export const api = {
 
   listTransactionSymbols: () => request<string[]>('/transactions/symbols'),
 
+  updateTransaction: (id: string, updates: Partial<{
+    date: string;
+    quantity: number;
+    transaction_type: string;
+    symbol: string;
+    instrument_name: string;
+    account_id: string;
+    currency: string;
+    notes: string | null;
+    price_native: number;
+    total_native: number;
+    price_eur: number;
+    total_eur: number;
+    fx_rate: number | null;
+    fees: number;
+  }>) =>
+    request<import('@/types/portfolio').Transaction>(`/transactions/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    }),
+
+  deleteTransaction: (id: string) =>
+    request<void>(`/transactions/${id}`, { method: 'DELETE' }),
+
   // Tax calculations
   saveTaxCalculation: (payload: {
     symbol: string;

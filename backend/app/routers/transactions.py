@@ -58,10 +58,27 @@ async def patch_transaction(
     updates: dict,
     db: AsyncSession = Depends(get_db),
 ):
-    """Partially update a transaction (fx_rate, currency, notes, etc.)."""
+    """Partially update a transaction.
+
+    Accepts any subset of: date, quantity, transaction_type, symbol,
+    instrument_name, account_id, currency, notes, price_native, total_native,
+    price_eur, total_eur, fx_rate, fees.
+
+    EUR-side derivatives (price_eur, total_eur, total_native) are
+    automatically recomputed from quantity / price_native / fx_rate when not
+    explicitly provided, so a typical edit only needs to send the fields the
+    user actually changed.
+
+    After committing, the affected holding(s) are recalculated via FIFO so
+    avg_cost_basis_eur and total_cost_eur stay consistent. If the edit
+    changes symbol, both the old and new symbol's holdings are recomputed.
+    """
     import uuid as _uuid
-    from fastapi import HTTPException
+    from datetime import date as _date
     from decimal import Decimal as D
+    from fastapi import HTTPException
+
+    from app.models.transaction import TransactionType as _TxType
 
     stmt = select(Transaction).where(Transaction.id == _uuid.UUID(transaction_id))
     result = await db.execute(stmt)
@@ -69,19 +86,62 @@ async def patch_transaction(
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    allowed_fields = {"fx_rate", "currency", "notes", "price_native", "total_native", "price_eur", "total_eur", "fees"}
+    old_symbol = tx.symbol
+
+    allowed_fields = {
+        "date", "quantity", "transaction_type", "symbol", "instrument_name",
+        "account_id", "currency", "notes",
+        "price_native", "total_native", "price_eur", "total_eur",
+        "fx_rate", "fees",
+    }
+    decimal_fields = {
+        "quantity", "price_native", "total_native",
+        "price_eur", "total_eur", "fx_rate", "fees",
+    }
+
     for key, value in updates.items():
         if key not in allowed_fields:
             continue
         if value is None:
             setattr(tx, key, None)
-        elif key in ("fx_rate", "price_native", "total_native", "price_eur", "total_eur", "fees"):
+        elif key in decimal_fields:
             setattr(tx, key, D(str(value)))
+        elif key == "date":
+            setattr(tx, key, _date.fromisoformat(value) if isinstance(value, str) else value)
+        elif key == "transaction_type":
+            setattr(tx, key, _TxType(value))
+        elif key == "account_id":
+            setattr(tx, key, _uuid.UUID(value) if isinstance(value, str) else value)
         else:
             setattr(tx, key, value)
 
+    # Auto-recompute EUR derivatives when the caller didn't supply them
+    qty = tx.quantity or D("0")
+    if "total_native" not in updates and tx.price_native is not None:
+        tx.total_native = (qty * tx.price_native).quantize(D("0.01"))
+    if "price_eur" not in updates and tx.price_native is not None:
+        if tx.currency == "EUR":
+            tx.price_eur = tx.price_native
+        elif tx.fx_rate:
+            tx.price_eur = (tx.price_native / tx.fx_rate).quantize(D("0.0001"))
+    if "total_eur" not in updates and tx.total_native is not None:
+        if tx.currency == "EUR":
+            tx.total_eur = tx.total_native
+        elif tx.fx_rate:
+            tx.total_eur = (tx.total_native / tx.fx_rate).quantize(D("0.01"))
+
     await db.commit()
     await db.refresh(tx)
+
+    # Recompute holdings for both old and new symbol (in case symbol was edited)
+    from app.routers.holdings import recalculate_holding_cost
+    for sym in {tx.symbol, old_symbol}:
+        try:
+            await recalculate_holding_cost(sym, db)
+        except HTTPException:
+            # No current holding for this symbol (fully sold out) — fine
+            pass
+
     return tx
 
 
