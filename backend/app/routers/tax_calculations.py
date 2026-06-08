@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +52,10 @@ class TaxCalculationRead(BaseModel):
 
 class DeclarationUpdate(BaseModel):
     """Mark a saved calculation as declared/paid (or clear it)."""
+    # Accept a number for paid_amount_eur too: the frontend's response coercion
+    # can turn the stored "6464.15" string into a number before it round-trips.
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
     declared: bool
     paid_amount_eur: Optional[str] = None
     paid_date: Optional[date] = None

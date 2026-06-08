@@ -28,6 +28,34 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * Extract a human-readable message from a FastAPI error body. FastAPI returns
+ * validation errors (422) with `detail` as an ARRAY of `{loc, msg, type}`
+ * objects; naively coercing that to a string yields "[object Object]". Handle
+ * string, array and object shapes so the user always sees something useful.
+ */
+function extractErrorMessage(error: unknown): string {
+  if (!error || typeof error !== 'object') return String(error ?? '');
+  const detail = (error as { detail?: unknown }).detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        if (d && typeof d === 'object' && 'msg' in d) {
+          const loc = Array.isArray((d as { loc?: unknown[] }).loc)
+            ? (d as { loc: unknown[] }).loc.join('.')
+            : '';
+          const msg = (d as { msg?: unknown }).msg;
+          return loc ? `${loc}: ${msg}` : String(msg);
+        }
+        return typeof d === 'string' ? d : JSON.stringify(d);
+      })
+      .join('; ');
+  }
+  if (detail && typeof detail === 'object') return JSON.stringify(detail);
+  return '';
+}
+
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   const res = await fetch(url, {
@@ -42,7 +70,7 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || `API error: ${res.status}`);
+    throw new Error(extractErrorMessage(error) || `API error: ${res.status}`);
   }
 
   // 204 No Content (e.g. DELETE) or any empty body has nothing to parse.
@@ -240,12 +268,24 @@ export const api = {
 
   setTaxCalculationDeclaration: (
     id: string,
-    body: { declared: boolean; paid_amount_eur?: string | null; paid_date?: string | null }
-  ) =>
-    request<{ id: string; declared: boolean; paid_amount_eur: string | null; paid_date: string | null }>(
+    body: { declared: boolean; paid_amount_eur?: string | number | null; paid_date?: string | null }
+  ) => {
+    // paid_amount_eur must reach the backend as a string. Summary/list responses
+    // run through coerceNumbers(), which turns "6464.15" into a number, so a
+    // caller may unknowingly pass a number here — normalise it before sending.
+    const payload = {
+      declared: body.declared,
+      paid_amount_eur:
+        body.paid_amount_eur === null || body.paid_amount_eur === undefined
+          ? null
+          : String(body.paid_amount_eur),
+      paid_date: body.paid_date ?? null,
+    };
+    return request<{ id: string; declared: boolean; paid_amount_eur: string | null; paid_date: string | null }>(
       `/transactions/tax-calculations/${id}/declaration`,
-      { method: 'PATCH', body: JSON.stringify(body) }
-    ),
+      { method: 'PATCH', body: JSON.stringify(payload) }
+    );
+  },
 
   getDeclarationSummary: (year: number, symbol = 'MSFT') =>
     request<{

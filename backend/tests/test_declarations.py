@@ -11,6 +11,25 @@ from app.services.declarations import (
 )
 
 
+def test_declaration_update_accepts_numeric_paid_amount():
+    """The frontend's response coercion can turn the stored paid amount into a
+    number before it round-trips; the endpoint schema must accept that."""
+    import pytest
+
+    pytest.importorskip("fastapi")
+    from app.routers.tax_calculations import DeclarationUpdate
+
+    # number in -> coerced to string
+    m = DeclarationUpdate(declared=True, paid_amount_eur=12456.95)
+    assert m.paid_amount_eur == "12456.95"
+    # normal string still works
+    m2 = DeclarationUpdate(declared=True, paid_amount_eur="6464.15")
+    assert m2.paid_amount_eur == "6464.15"
+    # clearing works
+    m3 = DeclarationUpdate(declared=False)
+    assert m3.paid_amount_eur is None
+
+
 def _sale(id, d, tax, declared=False, paid=None, paid_date=None,
           proceeds="0", acquisition="0", gain="0"):
     return DeclarationSale(
