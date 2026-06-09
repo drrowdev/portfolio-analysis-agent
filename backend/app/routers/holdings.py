@@ -94,6 +94,7 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
     holding = result.scalar_one_or_none()
 
     if trade.trade_type == "buy":
+        price_native = trade.price_per_share_native or trade.price_per_share_eur
         if holding:
             old_cost = holding.total_cost_eur
             old_qty = holding.total_quantity
@@ -101,8 +102,22 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
             holding.total_quantity = old_qty + trade.quantity
             holding.total_cost_eur = old_cost + new_cost
             holding.avg_cost_basis_eur = holding.total_cost_eur / holding.total_quantity
+            # Native cost: only update if existing native cost is consistent with
+            # the same currency. If the holding has no native cost or currencies
+            # mismatch, leave native NULL — the next /holdings/recalculate/{symbol}
+            # call will rebuild it cleanly.
+            if (
+                holding.total_cost_native is not None
+                and (holding.currency or "").upper() == (trade.currency or "").upper()
+            ):
+                holding.total_cost_native = holding.total_cost_native + (trade.quantity * price_native)
+                holding.avg_cost_basis_native = holding.total_cost_native / holding.total_quantity
+            else:
+                holding.total_cost_native = None
+                holding.avg_cost_basis_native = None
         else:
             total_cost = trade.quantity * trade.price_per_share_eur
+            total_cost_native = trade.quantity * price_native
             holding = Holding(
                 account_id=trade.account_id,
                 symbol=trade.symbol,
@@ -113,6 +128,8 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
                 total_quantity=trade.quantity,
                 avg_cost_basis_eur=trade.price_per_share_eur,
                 total_cost_eur=total_cost,
+                avg_cost_basis_native=price_native,
+                total_cost_native=total_cost_native,
             )
             db.add(holding)
     elif trade.trade_type == "sell":
@@ -168,12 +185,15 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
         )
         tx_result = await db.execute(tx_stmt)
         all_txs = list(tx_result.scalars().all())
-        running_qty, running_cost, _lots = _fifo_replay(all_txs, buy_types, sell_types)
+        running_qty, running_cost, running_cost_native, _lots = _fifo_replay(all_txs, buy_types, sell_types)
 
         if running_qty > 0:
             holding.total_quantity = running_qty
             holding.total_cost_eur = running_cost
             holding.avg_cost_basis_eur = running_cost / running_qty
+            if running_cost_native is not None:
+                holding.total_cost_native = running_cost_native
+                holding.avg_cost_basis_native = running_cost_native / running_qty
         else:
             await db.delete(holding)
         await db.commit()
@@ -212,38 +232,51 @@ async def delete_holding(holding_id: uuid.UUID, db: AsyncSession = Depends(get_d
     return {"status": "deleted", "symbol": holding.symbol}
 
 
-def _fifo_replay(transactions: list, buy_types: list, sell_types: list) -> tuple[Decimal, list]:
-    """Replay transactions using FIFO and return (remaining_cost, remaining_lots).
+def _fifo_replay(transactions: list, buy_types: list, sell_types: list):
+    """Replay transactions using FIFO and return (qty, cost_eur, cost_native, lots).
 
-    Each lot is [qty, price_eur_per_share].
-    Returns the total cost of remaining lots and the lots themselves.
+    Each lot is [qty, price_eur, price_native, currency]. cost_native is
+    the sum of remaining (qty × price_native) — but only valid if every
+    transaction shares the same currency. When currencies mix for the
+    same symbol (rare; should not happen in practice for a single listing)
+    cost_native is returned as None so callers can fall back to EUR-only.
     """
-    lots: list[list[Decimal]] = []  # [[qty, price_eur], ...]
+    lots: list[list] = []  # [[qty, price_eur, price_native, currency], ...]
+    currencies: set[str] = set()
 
     for tx in transactions:
         qty = tx.quantity or Decimal("0")
         if qty == 0:
             continue
+        ccy = (tx.currency or "").upper() or None
+        if ccy:
+            currencies.add(ccy)
 
         if tx.transaction_type in buy_types:
-            price = tx.price_eur or (
+            price_eur = tx.price_eur or (
                 (tx.total_eur / qty) if tx.total_eur and qty else Decimal("0")
             )
-            lots.append([qty, price])
+            price_native = tx.price_native or price_eur
+            lots.append([qty, price_eur, price_native, ccy])
         elif tx.transaction_type in sell_types:
             remaining = qty
             while remaining > 0 and lots:
-                lot_qty, lot_price = lots[0]
+                lot_qty, lot_price_eur, lot_price_native, lot_ccy = lots[0]
                 if lot_qty <= remaining:
                     remaining -= lot_qty
                     lots.pop(0)
                 else:
-                    lots[0] = [lot_qty - remaining, lot_price]
+                    lots[0] = [lot_qty - remaining, lot_price_eur, lot_price_native, lot_ccy]
                     remaining = Decimal("0")
 
     running_qty = sum(lot[0] for lot in lots)
-    running_cost = sum(lot[0] * lot[1] for lot in lots)
-    return running_qty, running_cost, lots
+    running_cost_eur = sum(lot[0] * lot[1] for lot in lots)
+    if len(currencies) == 1:
+        running_cost_native = sum(lot[0] * lot[2] for lot in lots)
+    else:
+        # Mixed-currency history — refuse to give a misleading native sum.
+        running_cost_native = None
+    return running_qty, running_cost_eur, running_cost_native, lots
 
 
 @router.post("/recalculate/{symbol}")
@@ -272,7 +305,7 @@ async def recalculate_holding_cost(symbol: str, db: AsyncSession = Depends(get_d
     transactions = list(tx_result.scalars().all())
 
     # Replay using FIFO
-    running_qty, running_cost, _lots = _fifo_replay(transactions, buy_types, sell_types)
+    running_qty, running_cost, running_cost_native, _lots = _fifo_replay(transactions, buy_types, sell_types)
 
     # Update the holding
     old_avg = holding.avg_cost_basis_eur
@@ -281,6 +314,16 @@ async def recalculate_holding_cost(symbol: str, db: AsyncSession = Depends(get_d
     holding.total_quantity = running_qty
     holding.avg_cost_basis_eur = (running_cost / running_qty) if running_qty > 0 else Decimal("0")
     holding.total_cost_eur = running_cost
+    if running_cost_native is not None and running_qty > 0:
+        holding.avg_cost_basis_native = running_cost_native / running_qty
+        holding.total_cost_native = running_cost_native
+    elif running_cost_native is not None:
+        holding.avg_cost_basis_native = Decimal("0")
+        holding.total_cost_native = Decimal("0")
+    else:
+        # Mixed-currency history — clear native fields so the UI falls back to EUR.
+        holding.avg_cost_basis_native = None
+        holding.total_cost_native = None
 
     await db.commit()
 

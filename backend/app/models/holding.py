@@ -22,6 +22,12 @@ class Holding(TimestampMixin, Base):
     total_quantity: Mapped[Decimal]
     avg_cost_basis_eur: Mapped[Decimal]
     total_cost_eur: Mapped[Decimal]
+    # Native-currency cost basis (matches the holding's listing currency, e.g.
+    # USD for MSFT, EUR for SAMPO). Populated by the FIFO recalc; NULL for
+    # holdings created before this column existed or when transactions for
+    # the symbol mix currencies (in which case there is no single native sum).
+    avg_cost_basis_native: Mapped[Optional[Decimal]] = mapped_column(default=None)
+    total_cost_native: Mapped[Optional[Decimal]] = mapped_column(default=None)
     current_price_native: Mapped[Optional[Decimal]] = mapped_column(default=None)
     current_price_eur: Mapped[Optional[Decimal]] = mapped_column(default=None)
     current_value_eur: Mapped[Optional[Decimal]] = mapped_column(default=None)

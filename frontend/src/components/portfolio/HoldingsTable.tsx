@@ -59,7 +59,11 @@ function HoldingsRows({ holdings, accountNames, privacyMode, mask, isCrypto }: {
             {privacyMode ? mask(0) : formatNumber(h.total_quantity, Number(h.total_quantity) % 1 === 0 ? 0 : isCrypto ? 6 : 3)}
           </TableCell>
           <TableCell className="text-right font-mono hidden sm:table-cell">
-            {privacyMode ? mask(0) : formatCurrency(h.avg_cost_basis_eur)}
+            {privacyMode
+              ? mask(0)
+              : h.avg_cost_basis_native != null
+                ? formatCurrency(h.avg_cost_basis_native, h.currency || 'EUR')
+                : formatCurrency(h.avg_cost_basis_eur)}
           </TableCell>
           <TableCell className="text-right font-mono">
             {privacyMode

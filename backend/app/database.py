@@ -42,6 +42,8 @@ async def init_db() -> None:
             ("holdings", "market_state", "VARCHAR(20)"),
             ("holdings", "extended_hours_price", "NUMERIC"),
             ("holdings", "extended_hours_change_pct", "NUMERIC"),
+            ("holdings", "avg_cost_basis_native", "NUMERIC"),
+            ("holdings", "total_cost_native", "NUMERIC"),
             ("tax_calculations", "declared_at", "TIMESTAMP"),
             ("tax_calculations", "paid_amount_eur", "VARCHAR(30)"),
             ("tax_calculations", "paid_date", "DATE"),

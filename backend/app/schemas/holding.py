@@ -17,6 +17,8 @@ class HoldingRead(BaseModel):
     total_quantity: Decimal
     avg_cost_basis_eur: Decimal
     total_cost_eur: Decimal
+    avg_cost_basis_native: Optional[Decimal]
+    total_cost_native: Optional[Decimal]
     current_price_native: Optional[Decimal]
     current_price_eur: Optional[Decimal]
     current_value_eur: Optional[Decimal]
