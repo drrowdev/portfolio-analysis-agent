@@ -62,7 +62,13 @@ function HoldingsRows({ holdings, accountNames, privacyMode, mask, isCrypto }: {
             {privacyMode ? mask(0) : formatCurrency(h.avg_cost_basis_eur)}
           </TableCell>
           <TableCell className="text-right font-mono">
-            {privacyMode ? mask(0) : h.current_price_eur != null ? formatCurrency(h.current_price_eur) : '—'}
+            {privacyMode
+              ? mask(0)
+              : h.current_price_native != null
+                ? formatCurrency(h.current_price_native, h.currency || 'EUR')
+                : h.current_price_eur != null
+                  ? formatCurrency(h.current_price_eur)
+                  : '—'}
           </TableCell>
           <TableCell className="text-right font-mono">
             <div className="flex flex-col items-end gap-0.5 leading-tight">

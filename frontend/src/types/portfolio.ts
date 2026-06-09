@@ -21,6 +21,7 @@ export interface Holding {
   total_quantity: number;
   avg_cost_basis_eur: number;
   total_cost_eur: number;
+  current_price_native: number | null;
   current_price_eur: number | null;
   current_value_eur: number | null;
   unrealized_pnl_eur: number | null;
