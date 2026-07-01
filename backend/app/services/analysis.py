@@ -223,11 +223,8 @@ async def _call_claude(prompt: str) -> dict[str, Any]:
     message = await client.messages.create(
         model="claude-sonnet-5",
         max_tokens=16000,
-        temperature=1,  # required for extended thinking
-        thinking={
-            "type": "enabled",
-            "budget_tokens": 10000,
-        },
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     )

@@ -80,11 +80,8 @@ def _run_claude_stream(q: queue.Queue, messages: list[dict], system: str):
         with client.messages.stream(
             model="claude-sonnet-5",
             max_tokens=20000,
-            temperature=1,  # required for extended thinking
-            thinking={
-                "type": "enabled",
-                "budget_tokens": 16000,
-            },
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
             system=system,
             messages=messages,
         ) as stream:
