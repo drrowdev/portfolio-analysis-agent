@@ -221,7 +221,7 @@ async def _call_claude(prompt: str) -> dict[str, Any]:
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
     message = await client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         max_tokens=16000,
         temperature=1,  # required for extended thinking
         thinking={

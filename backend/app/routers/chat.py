@@ -78,7 +78,7 @@ def _run_claude_stream(q: queue.Queue, messages: list[dict], system: str):
     try:
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         with client.messages.stream(
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             max_tokens=20000,
             temperature=1,  # required for extended thinking
             thinking={
