@@ -4,8 +4,6 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 
 📖 See [`CHANGELOG.md`](CHANGELOG.md) for release history and [`AGENTS.md`](AGENTS.md) for the doc-update policy that keeps this README in sync with the code.
 
-![Dashboard](architecture.png)
-
 ## Features
 
 - **Real-time portfolio tracking** — Live prices via yfinance with automatic refresh; holdings shown in each stock's native listed currency (USD, EUR, …)

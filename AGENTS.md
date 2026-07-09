@@ -30,7 +30,7 @@ When you make a change of a given **kind**, update the docs in the corresponding
 | DB schema change | possibly Architecture | ✅ `Changed` | — | ✅ new revision | Run `alembic revision --autogenerate`. |
 | New Azure resource | ✅ Azure Resources section | ✅ `Changed` | — | — | Also update `azure-resources.txt`. |
 | CI/CD change | — | ✅ `Changed` | — | — | Update `.github/workflows/deploy.yml` carefully. |
-| Architecture change (new service, queue, scheduler, etc.) | ✅ Architecture diagram | ✅ `Changed` | — | — | Update `architecture.excalidraw` + re-export `architecture.png`. |
+| Architecture change (new service, queue, scheduler, etc.) | ✅ update the ASCII Architecture diagram | ✅ `Changed` | — | — | Keep the ASCII diagram in the README "Architecture" section current. |
 | Trivial refactor / typo / formatting | — | — | — | — | No doc churn needed. |
 
 **Rule of thumb:** if a future contributor (or your future self) would be surprised by your change after only reading the README, the README needs an update.
