@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     FINNHUB_API_KEY: str = ""
     NTFY_TOPIC: str = "portfolio-alerts"
-    MSAL_CLIENT_ID: str = ""
     KRAKEN_API_KEY: str = ""
     KRAKEN_API_SECRET: str = ""
     APP_SECRET: str = ""  # Password for cookie-based access gate
