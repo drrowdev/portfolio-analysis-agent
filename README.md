@@ -8,14 +8,16 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 
 ## Features
 
-- **Real-time portfolio tracking** — Live prices via yfinance with automatic refresh
-- **AI-powered analysis** — Daily summaries, rebalance recommendations, tax optimization (Claude)
+- **Real-time portfolio tracking** — Live prices via yfinance with automatic refresh; holdings shown in each stock's native listed currency (USD, EUR, …)
+- **AI-powered analysis** — Daily summaries, rebalance recommendations, tax optimization (Claude Sonnet 5)
 - **Streaming AI chat** — Ask questions about your portfolio in natural language
-- **Multi-broker support** — Nordnet, Fidelity, Kraken with CSV/PDF import
-- **Finnish tax awareness** — Arvo-osuustili, OST, ESPP, and Crypto account types
+- **Multi-broker support** — Nordnet, Fidelity, Kraken with CSV/PDF import (USD→EUR converted on import at each trade's historical ECB rate)
+- **Manual trade entry & editing** — Record, edit, or delete trades with per-field EUR/USD currency toggles and trade-date FX rates
+- **Finnish capital-gains tax suite** — Per-sale ennakkovero calculator (per-lot hankintameno-olettama, 30 %/34 % bracket), year-to-date €30k capital-income tracker, and OmaVero declaration & payment tracking with PDF export
+- **Finnish tax-aware accounts** — Arvo-osuustili, OST, ESPP, and Crypto account types
 - **Market news & alerts** — Price, earnings, rebalance, and news-triggered alerts
 - **Investment goals** — Track progress toward financial targets
-- **Mobile-responsive UI** — Works on desktop and mobile
+- **Mobile-responsive UI** — Works on desktop and mobile (Bearer-token auth fallback for browsers that block cross-site cookies)
 
 ## Tech Stack
 
@@ -23,8 +25,8 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 |-------|-------|
 | Backend | Python 3.12, FastAPI, SQLAlchemy 2.0, PostgreSQL |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, Recharts |
-| Auth | Microsoft MSAL (Personal Account), JWT RS256 |
-| AI | Anthropic Claude (streaming chat + scheduled analysis) |
+| Auth | Shared-password gate — HTTP-only `paa_session` cookie (`SameSite=None; Secure`) with `Authorization: Bearer` fallback for mobile |
+| AI | Anthropic Claude Sonnet 5 (streaming chat + scheduled analysis) |
 | Market Data | yfinance, Finnhub, NewsAPI, Kraken API |
 | Deployment | Backend: Docker + Azure Container Apps. Frontend: Azure Static Web Apps (Free tier). GitHub Actions CI/CD. |
 
@@ -54,17 +56,21 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 
 | Route | Description |
 |-------|-------------|
+| `/api/v1/auth` | Login + auth check for the shared-password gate |
+| `/api/v1/dashboard` | Combined above-the-fold dashboard payload (single request) |
 | `/api/v1/accounts` | Account management (CRUD) |
-| `/api/v1/holdings` | Holdings with live prices, quick trades |
+| `/api/v1/holdings` | Holdings with live prices (native currency), quick trades |
 | `/api/v1/portfolio` | Portfolio summary, performance, allocation |
-| `/api/v1/transactions` | Transaction history and management |
-| `/api/v1/analysis` | AI insights: daily summary, rebalance, tax optimization |
+| `/api/v1/transactions` | Transaction history, edit/delete, capital-income summary |
+| `/api/v1/transactions/tax-calculations` | Saved ennakkovero calcs: CRUD, OmaVero declaration tracking, PDF export |
+| `/api/v1/analysis` | AI insights: daily summary, rebalance, tax optimization, news impact |
 | `/api/v1/chat` | Streaming AI chat grounded in portfolio context |
-| `/api/v1/strategy` | Investment strategy and target allocation |
+| `/api/v1/strategies` | Investment strategy and target allocation |
 | `/api/v1/goals` | Investment goals tracking |
-| `/api/v1/alerts` | Alert management (price, news, earnings) |
+| `/api/v1/alerts` | Alert management (price, news, earnings, rebalance) |
 | `/api/v1/news` | Market news with impact analysis |
-| `/api/v1/settings` | User settings and FX rate config |
+| `/api/v1/settings` | User settings; `/api/v1/fx/eurusd` for historical EUR/USD rates |
+| `/api/v1/market-status` | US / Helsinki market open-closed state + next open |
 | `/api/v1/upload` | CSV/PDF file import |
 
 ## Local Development
@@ -72,7 +78,7 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 ### Prerequisites
 
 - Python 3.12+
-- Node.js 22+
+- Node.js 20+
 - Docker (optional, for containerized runs)
 
 ### Backend
@@ -95,12 +101,17 @@ npm run dev  # Starts on http://localhost:5173
 
 ### Environment Variables
 
-Backend (`.env`):
-- `DATABASE_URL` — PostgreSQL connection string (or omit for SQLite)
+Backend (`.env`, see `backend/.env.example`):
+- `DATABASE_URL` — PostgreSQL connection string (or omit for SQLite in local dev)
 - `ANTHROPIC_API_KEY` — Claude API key for AI features
-- `AZURE_CLIENT_ID` — Microsoft app registration for auth
+- `APP_SECRET` — shared password for the cookie/Bearer access gate (leave empty to disable the gate locally)
 - `FINNHUB_API_KEY` — Market news (optional)
 - `NEWS_API_KEY` — News aggregation (optional)
+- `NTFY_TOPIC` — ntfy.sh topic for push alerts (optional; default `portfolio-alerts`)
+- `CORS_ORIGINS` — comma-separated allowed frontend origins (production only; set on the Container App)
+
+Frontend (build-time):
+- `VITE_API_BASE_URL` — backend API base URL baked in at build; defaults to `/api/v1` for local dev (Vite proxy)
 
 ## Deployment
 
@@ -130,7 +141,7 @@ portfolio-analysis-agent/
 │   │   ├── routers/             # API route handlers
 │   │   ├── models/              # SQLAlchemy models
 │   │   ├── services/            # Business logic (market data, AI, alerts)
-│   │   ├── auth.py              # MSAL authentication
+│   │   ├── routers/gate.py      # Shared-password auth gate (cookie + Bearer)
 │   │   └── config.py            # Configuration
 │   ├── alembic/                 # Database migrations
 │   ├── tests/                   # Backend tests

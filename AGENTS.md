@@ -49,13 +49,13 @@ Types in use: `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`, `ci`, 
 
 ## Common Pitfalls
 
-- **Auth** — the app uses a cookie-based password gate (not MSAL). The shared secret is set via `APP_PASSWORD` env var. Don't re-introduce Azure AD dependencies.
+- **Auth** — the app uses a cookie-based password gate (not MSAL). The shared secret is set via the `APP_SECRET` env var. Don't re-introduce Azure AD dependencies. (`backend/app/auth.py` is dead MSAL code left over from the old design — the live gate is `backend/app/routers/gate.py`.)
 - **yfinance rate limits** — cache via `MarketDataCache` model; don't hammer it from request handlers.
 - **Anthropic streaming** — use SSE; never buffer the whole response server-side or the chat will feel broken.
 - **Alembic autogenerate** is not perfect — review the generated migration before committing. Pay attention to enum changes and index renames.
 - **Cross-origin auth cookie** — the `paa_session` cookie is set with `SameSite=None; Secure; HttpOnly` so the SWA-hosted frontend can authenticate against the backend Container App. Always send `credentials: 'include'` on fetch calls (the central `api` module in `frontend/src/lib/api.ts` already does).
 - **Frontend → backend URL** — the build-time variable `VITE_API_BASE_URL` controls the API base URL. Set as a GitHub repo Variable for CI; defaults to `/api/v1` for local dev so the Vite proxy keeps working. If the backend URL changes, update both the GH Variable and the `CORS_ORIGINS` env var on the `portfolio-backend` Container App.
-- **Container Apps cold start** — backend uses `min_replicas: 0` (scale-to-zero) with a GitHub Actions keep-alive cron (`.github/workflows/keep-alive.yml`) pinging every 4 min. Don't set `min_replicas: 1` — it costs ~€19/month.
+- **Container Apps scaling** — the backend currently runs always-on at `min_replicas: 1` (single replica, no cold starts). There is **no** keep-alive workflow in the repo. Scale-to-zero (`min_replicas: 0`) plus an external keep-alive ping is the cheaper alternative (~€19/month saved) but was dropped in favour of always-on to avoid 10–20 s cold starts. If you switch back to scale-to-zero, add a keep-alive cron (e.g. `.github/workflows/keep-alive.yml`) and update this note.
 - **CSV/PDF importers** — Nordnet/Fidelity formats change yearly. Add a fixture under `backend/tests/fixtures/` whenever you touch a parser.
 - **Secrets** — never commit `.env`. `backend/.env` is gitignored; production secrets live in Azure Key Vault.
 - **Docker tags** — CI pushes `:latest` and `:<sha>`. Always reference `:<sha>` in Container Apps revisions for traceability.
