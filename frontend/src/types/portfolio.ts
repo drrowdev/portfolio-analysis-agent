@@ -5,7 +5,7 @@ export type AlertSeverity = 'info' | 'warning' | 'action';
 export interface Account {
   id: string;
   name: string;
-  broker: 'nordnet' | 'fidelity' | 'kraken';
+  broker: 'nordnet' | 'fidelity';
   account_type: AccountType;
   currency: string;
   tax_treatment: TaxTreatment;

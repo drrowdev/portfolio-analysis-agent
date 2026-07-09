@@ -59,6 +59,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `AGENTS.md` onboarding document with doc-update policy table and common pitfalls, so README/CHANGELOG/architecture stay in sync without a cron job.
 - `CHANGELOG.md` with retroactive `[1.0.0]` entry.
 
+### Removed
+- **Kraken crypto integration** — removed the unused Kraken API sync (`app/services/kraken.py` plus the never-mounted `app/routers/kraken.py`), the `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` settings, and the `kraken` broker option in the frontend types. The router was never wired into `main.py`, so there is no user-visible behavior change; manually tracked crypto (the `Crypto` account type) is unaffected.
+- **Dead MSAL auth module** — deleted `app/auth.py` (legacy Microsoft personal-account token validation) and the `MSAL_CLIENT_ID` setting. The app has used the shared-password cookie/Bearer gate (`app/routers/gate.py`) since the auth simplification, so nothing imported this module.
+
 ## [1.0.0] — Initial release
 
 ### Added

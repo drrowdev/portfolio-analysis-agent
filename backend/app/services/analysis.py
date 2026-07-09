@@ -57,7 +57,7 @@ KEY TAX RULES (Finland):
 - ESPP (Fidelity): employer stock purchase plan.
   Qualifying disposition: held >2y from offering, >1y from purchase → favorable tax treatment.
   Track holding periods carefully before any sale recommendation.
-- Crypto (Kraken): Capital gains taxed at 30/34%. FIFO cost basis. Each trade is taxable.
+- Crypto: Capital gains taxed at 30/34%. FIFO cost basis. Each trade is taxable.
   Transfers between wallets are NOT taxable.
 
 IMPORTANT CONSTRAINTS:

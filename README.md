@@ -11,7 +11,7 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 - **Real-time portfolio tracking** — Live prices via yfinance with automatic refresh; holdings shown in each stock's native listed currency (USD, EUR, …)
 - **AI-powered analysis** — Daily summaries, rebalance recommendations, tax optimization (Claude Sonnet 5)
 - **Streaming AI chat** — Ask questions about your portfolio in natural language
-- **Multi-broker support** — Nordnet, Fidelity, Kraken with CSV/PDF import (USD→EUR converted on import at each trade's historical ECB rate)
+- **Multi-broker import** — Nordnet (CSV) and Fidelity ESPP (PDF), with USD→EUR converted on import at each trade's historical ECB rate
 - **Manual trade entry & editing** — Record, edit, or delete trades with per-field EUR/USD currency toggles and trade-date FX rates
 - **Finnish capital-gains tax suite** — Per-sale ennakkovero calculator (per-lot hankintameno-olettama, 30 %/34 % bracket), year-to-date €30k capital-income tracker, and OmaVero declaration & payment tracking with PDF export
 - **Finnish tax-aware accounts** — Arvo-osuustili, OST, ESPP, and Crypto account types
@@ -27,7 +27,7 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, Recharts |
 | Auth | Shared-password gate — HTTP-only `paa_session` cookie (`SameSite=None; Secure`) with `Authorization: Bearer` fallback for mobile |
 | AI | Anthropic Claude Sonnet 5 (streaming chat + scheduled analysis) |
-| Market Data | yfinance, Finnhub, NewsAPI, Kraken API |
+| Market Data | yfinance, Finnhub, NewsAPI, Frankfurter (ECB FX) |
 | Deployment | Backend: Docker + Azure Container Apps. Frontend: Azure Static Web Apps (Free tier). GitHub Actions CI/CD. |
 
 ## Architecture
