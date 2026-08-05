@@ -148,8 +148,239 @@ def test_finite_period_ignores_unpriced_positions_closed_before_window(monkeypat
         "1m",
     )
 
-    assert "OLD" in captured["tickers"]
+    assert "OLD" not in captured["tickers"]
     assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_finite_period_ignores_priceable_positions_closed_before_window(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    captured: dict[str, list[str]] = {}
+
+    def fake_download(tickers, **_kwargs):
+        captured["tickers"] = list(tickers)
+        return _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                "OLD": [50, 55],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        )
+
+    monkeypatch.setattr(portfolio.yf, "download", fake_download)
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("OLD", today - timedelta(days=100), 1),
+            _transaction(
+                "OLD",
+                today - timedelta(days=90),
+                1,
+                transaction_type="sell",
+            ),
+            _transaction("AAA", period_start, 1),
+        ],
+        [_holding("AAA")],
+        "1m",
+    )
+
+    assert "OLD" not in captured["tickers"]
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_finite_period_warns_and_omits_unreconciled_orphan_history(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                "ORPHAN": [40, 40],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        ),
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("AAA", period_start, 1),
+            _transaction("ORPHAN", period_start, 1),
+        ],
+        [_holding("AAA")],
+        "1m",
+    )
+
+    assert response.warnings == [
+        "Omitted incomplete transaction histories for ORPHAN because they do "
+        "not reconcile to the current holdings snapshot."
+    ]
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_finite_period_omits_two_sided_history_that_does_not_reconcile(
+    monkeypatch,
+):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                "ORPHAN": [40, 40],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        ),
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("AAA", period_start, 1),
+            _transaction("ORPHAN", period_start, 2),
+            _transaction(
+                "ORPHAN",
+                today,
+                1,
+                transaction_type="sell",
+            ),
+        ],
+        [_holding("AAA")],
+        "1m",
+    )
+
+    assert response.warnings == [
+        "Omitted incomplete transaction histories for ORPHAN because they do "
+        "not reconcile to the current holdings snapshot."
+    ]
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_unpriced_split_imbalanced_orphan_still_fails_closed(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        ),
+    )
+
+    with pytest.raises(
+        portfolio.PerformanceDataUnavailableError,
+        match="Historical prices are unavailable for CLOSED",
+    ):
+        portfolio._compute_performance_sync(
+            [
+                _transaction("AAA", period_start, 1),
+                _transaction("CLOSED", period_start, 1),
+                _transaction(
+                    "CLOSED",
+                    today,
+                    2,
+                    transaction_type="sell",
+                ),
+            ],
+            [_holding("AAA")],
+            "1m",
+        )
+
+
+def test_finite_period_requires_prices_for_closed_in_window_history(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        ),
+    )
+
+    with pytest.raises(
+        portfolio.PerformanceDataUnavailableError,
+        match="Historical prices are unavailable for CLOSED",
+    ):
+        portfolio._compute_performance_sync(
+            [
+                _transaction("AAA", period_start, 1),
+                _transaction("CLOSED", period_start, 1),
+                _transaction(
+                    "CLOSED",
+                    today,
+                    1,
+                    transaction_type="sell",
+                ),
+            ],
+            [_holding("AAA")],
+            "1m",
+        )
+
+
+def test_finite_period_keeps_split_reconciled_closed_history(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    split_date = period_start + timedelta(days=1)
+    raw = _market_frame(
+        [period_start, split_date, today],
+        {
+            "CLOSED": [100, 55, 60],
+            portfolio.BENCHMARK_TICKER: [200, 210, 220],
+            "EURUSD=X": [2, 2, 2],
+        },
+        adjusted_series={
+            "CLOSED": [50, 55, 60],
+            portfolio.BENCHMARK_TICKER: [200, 210, 220],
+            "EURUSD=X": [2, 2, 2],
+        },
+    )
+    raw[("Stock Splits", "CLOSED")] = [0, 2, 0]
+    raw = raw.sort_index(axis=1)
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: raw,
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("CLOSED", period_start, 1),
+            _transaction(
+                "CLOSED",
+                today,
+                2,
+                transaction_type="sell",
+            ),
+        ],
+        [],
+        "1m",
+    )
+
+    assert response.warnings == []
+    assert response.data[-1].portfolio_return_pct == 20
 
 
 def test_finite_period_keeps_split_affected_zero_raw_holding(monkeypatch):
@@ -191,6 +422,172 @@ def test_finite_period_keeps_split_affected_zero_raw_holding(monkeypatch):
 
     assert response.data[0].portfolio_value_eur == 57
     assert response.data[-1].portfolio_return_pct == pytest.approx(5.26)
+
+
+def test_finite_period_ignores_zero_holding_without_position_history(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    captured: dict[str, list[str]] = {}
+
+    def fake_download(tickers, **_kwargs):
+        captured["tickers"] = list(tickers)
+        return _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        )
+
+    monkeypatch.setattr(portfolio.yf, "download", fake_download)
+
+    response = portfolio._compute_performance_sync(
+        [_transaction("AAA", period_start, 1)],
+        [
+            _holding("AAA"),
+            _holding("DEAD", quantity=0),
+        ],
+        "1m",
+    )
+
+    assert "DEAD" not in captured["tickers"]
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_zero_holding_snapshot_fetches_older_split_for_later_sale(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    snapshot_date = today - timedelta(days=100)
+    split_date = today - timedelta(days=60)
+    sale_date = today - timedelta(days=10)
+    download_start = period_start - timedelta(days=portfolio._PRICE_LOOKBACK_DAYS)
+    main_raw = _market_frame(
+        [period_start, sale_date, today],
+        {
+            "AAA": [60, 65, 70],
+            portfolio.BENCHMARK_TICKER: [200, 210, 220],
+            "EURUSD=X": [2, 2, 2],
+        },
+    )
+    old_actions = _market_frame(
+        [snapshot_date, split_date, download_start - timedelta(days=1)],
+        {"AAA": [100, 55, 58]},
+    )
+    old_actions[("Stock Splits", "AAA")] = [0, 2, 0]
+    old_actions = old_actions.sort_index(axis=1)
+    requested_starts: list[str] = []
+
+    def fake_download(_tickers, **kwargs):
+        requested_starts.append(kwargs["start"])
+        return old_actions if kwargs["start"] == str(snapshot_date) else main_raw
+
+    monkeypatch.setattr(portfolio.yf, "download", fake_download)
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction(
+                "AAA",
+                sale_date,
+                1,
+                transaction_type="sell",
+            )
+        ],
+        [_holding("AAA", quantity=0, snapshot_date=snapshot_date)],
+        "1m",
+    )
+
+    assert requested_starts == [str(download_start), str(snapshot_date)]
+    assert response.data[0].date == period_start
+    assert response.data[-1].portfolio_value_eur == 70
+    assert response.data[-1].portfolio_return_pct == pytest.approx(16.67)
+
+
+def test_all_period_ignores_zero_quantity_position_symbols(monkeypatch):
+    start = date.today() - timedelta(days=3)
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: _market_frame(
+            [start, date.today()],
+            {
+                "AAA": [100, 110],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        ),
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("AAA", start, 1),
+            _transaction("ZERO", start, 0),
+        ],
+        [_holding("AAA")],
+        "all",
+    )
+
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_only_omitted_history_returns_its_warning(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: pytest.fail(
+            "market data should not be requested for an omitted history"
+        ),
+    )
+
+    response = portfolio._compute_performance_sync(
+        [_transaction("ORPHAN", period_start, 1)],
+        [],
+        "1m",
+    )
+
+    assert response.data == []
+    assert response.warnings == [
+        "Omitted incomplete transaction histories for ORPHAN because they do "
+        "not reconcile to the current holdings snapshot."
+    ]
+
+
+def test_future_dated_orphan_still_fails_closed():
+    with pytest.raises(
+        portfolio.PerformanceDataUnavailableError,
+        match="ORPHAN has a future-dated position change",
+    ):
+        portfolio._compute_performance_sync(
+            [
+                _transaction(
+                    "ORPHAN",
+                    date.today() + timedelta(days=1),
+                    1,
+                )
+            ],
+            [],
+            "1m",
+        )
+
+
+def test_future_dated_zero_holding_snapshot_still_fails_closed():
+    with pytest.raises(
+        portfolio.PerformanceDataUnavailableError,
+        match="ZERO has a future-dated holding snapshot",
+    ):
+        portfolio._compute_performance_sync(
+            [],
+            [
+                _holding(
+                    "ZERO",
+                    quantity=0,
+                    snapshot_date=date.today() + timedelta(days=1),
+                )
+            ],
+            "1m",
+        )
 
 
 def test_weights_total_returns_by_actual_market_value(monkeypatch):

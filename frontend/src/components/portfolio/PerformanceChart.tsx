@@ -84,9 +84,11 @@ export function PerformanceChart() {
   const { privacyMode } = usePrivacy();
 
   const chartData = data?.data ?? [];
-  const benchmarkName = data?.benchmark_name ?? 'S&P 500 Price Index (legacy)';
+  const benchmarkName = data?.benchmark_name ?? 'S&P 500 Total Return';
   const benchmarkLabel = `${benchmarkName} (${data?.currency ?? 'EUR'})`;
-  const lastPoint = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+  const lastPoint = !error && chartData.length > 0
+    ? chartData[chartData.length - 1]
+    : null;
   const diff = lastPoint
     ? lastPoint.portfolio_return_pct - lastPoint.sp500_return_pct
     : 0;
@@ -138,11 +140,12 @@ export function PerformanceChart() {
         )}
       </div>
 
-      <p className="mb-3 text-xs text-muted-foreground">
-        {data?.methodology ??
-          'Legacy comparison: the benchmark is the S&P 500 price return in EUR. Update the backend for the dividend-inclusive total-return comparison.'}
-      </p>
-      {(data?.warnings ?? []).map((warning) => (
+      {!error && data?.methodology && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          {data.methodology}
+        </p>
+      )}
+      {!error && (data?.warnings ?? []).map((warning) => (
         <p
           key={warning}
           className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
