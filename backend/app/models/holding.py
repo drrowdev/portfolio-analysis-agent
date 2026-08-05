@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -20,6 +20,7 @@ class Holding(TimestampMixin, Base):
     exchange: Mapped[Optional[str]] = mapped_column(String(50), default=None)
     currency: Mapped[str] = mapped_column(String(3))
     total_quantity: Mapped[Decimal]
+    snapshot_date: Mapped[Optional[date]] = mapped_column(default=None)
     avg_cost_basis_eur: Mapped[Decimal]
     total_cost_eur: Mapped[Decimal]
     # Native-currency cost basis (matches the holding's listing currency, e.g.

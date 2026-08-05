@@ -82,6 +82,11 @@ export interface PerformanceDataPoint {
 export interface PerformanceResponse {
   period: string;
   start_date: string;
+  benchmark_name?: string;
+  benchmark_ticker?: string;
+  currency?: string;
+  methodology?: string;
+  warnings?: string[];
   data: PerformanceDataPoint[];
 }
 

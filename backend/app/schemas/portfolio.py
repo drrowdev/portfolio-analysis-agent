@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AccountSummary(BaseModel):
@@ -45,4 +45,14 @@ class PerformanceDataPoint(BaseModel):
 class PerformanceResponse(BaseModel):
     period: str
     start_date: date
+    benchmark_name: str = "S&P 500 Total Return"
+    benchmark_ticker: str = "^SP500TR"
+    currency: str = "EUR"
+    methodology: str = (
+        "Time-weighted market return of recorded invested holdings in EUR, using "
+        "raw closes for market-value weights and adjusted-close relatives for total "
+        "returns. Position changes are neutralized at the daily close; cash, fees, "
+        "and taxes are excluded."
+    )
+    warnings: list[str] = Field(default_factory=list)
     data: list[PerformanceDataPoint]

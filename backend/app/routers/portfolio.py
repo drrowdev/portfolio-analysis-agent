@@ -1,11 +1,15 @@
 import logging
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.portfolio import PerformanceResponse, PortfolioSummary
-from app.services.portfolio import compute_performance_comparison, compute_portfolio_summary
+from app.services.portfolio import (
+    PerformanceDataUnavailableError,
+    compute_performance_comparison,
+    compute_portfolio_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +45,11 @@ async def get_portfolio_performance(
     db: AsyncSession = Depends(get_db),
 ) -> PerformanceResponse:
     """Return portfolio vs S&P 500 cumulative return comparison."""
-    return await compute_performance_comparison(db, period=period)
+    try:
+        return await compute_performance_comparison(db, period=period)
+    except PerformanceDataUnavailableError as exc:
+        logger.warning("Performance comparison unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/sector-breakdown")

@@ -132,7 +132,9 @@ export function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">Performance vs S&amp;P 500</CardTitle>
+          <CardTitle className="text-sm font-medium">
+            Invested Holdings vs S&amp;P 500
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <Suspense fallback={<Skeleton className="h-64 w-full" />}>

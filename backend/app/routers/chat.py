@@ -1,6 +1,5 @@
 """Streaming AI chat endpoint grounded in full portfolio context."""
 
-import asyncio
 import logging
 import queue
 import threading
@@ -61,8 +60,10 @@ async def _build_full_context(db: AsyncSession) -> str:
             latest = perf.data[-1]
             parts.append(
                 f"\nPERFORMANCE (1Y):\n"
-                f"  Portfolio return: {latest.portfolio_return_pct:.1f}%\n"
-                f"  S&P 500 return: {latest.sp500_return_pct:.1f}%"
+                f"  Invested holdings TWRR ({perf.currency}): "
+                f"{latest.portfolio_return_pct:.1f}%\n"
+                f"  {perf.benchmark_name} return ({perf.currency}): "
+                f"{latest.sp500_return_pct:.1f}%"
             )
     except Exception:
         pass
