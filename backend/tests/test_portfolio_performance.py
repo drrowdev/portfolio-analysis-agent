@@ -73,6 +73,32 @@ def _holding(
     }
 
 
+def test_performance_security_filter_excludes_crypto_accounts_and_symbols(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        portfolio.symbol_metadata_service,
+        "is_crypto",
+        lambda symbol: symbol == "TOKEN",
+    )
+
+    assert portfolio._include_performance_security(
+        "stock-account",
+        "MSFT",
+        {"crypto-account"},
+    )
+    assert not portfolio._include_performance_security(
+        "crypto-account",
+        "UNMAPPED",
+        {"crypto-account"},
+    )
+    assert not portfolio._include_performance_security(
+        "stock-account",
+        "TOKEN",
+        {"crypto-account"},
+    )
+
+
 def test_uses_total_return_benchmark_and_common_zero_baseline(monkeypatch):
     start = date.today() - timedelta(days=4)
     dates = [start, start + timedelta(days=1), start + timedelta(days=2)]

@@ -133,7 +133,7 @@ export function PerformanceChart() {
               <>
                 {beating ? '▲' : '▼'} {beating ? 'Beating' : 'Trailing'}{' '}
                 {benchmarkName} by{' '}
-                {privacyMode ? '•••••' : `${Math.abs(diff).toFixed(1)} pp`}
+                {privacyMode ? '•••••' : `${Math.abs(diff).toFixed(1)}%`}
               </>
             )}
           </span>
@@ -209,7 +209,7 @@ export function PerformanceChart() {
               <Line
                 type="linear"
                 dataKey="portfolio_return_pct"
-                name={`Invested holdings TWRR (${data?.currency ?? 'EUR'})`}
+                name={`Stock holdings TWRR (${data?.currency ?? 'EUR'})`}
                 stroke="#10b981"
                 strokeWidth={2}
                 dot={false}

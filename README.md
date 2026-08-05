@@ -13,6 +13,7 @@ AI-powered investment portfolio tracker and analyzer for Finnish tax-aware accou
 - **Manual trade entry & editing** — Record, edit, or delete trades with per-field EUR/USD currency toggles and trade-date FX rates
 - **Finnish capital-gains tax suite** — Per-sale ennakkovero calculator (per-lot hankintameno-olettama, 30 %/34 % bracket), year-to-date €30k capital-income tracker, and OmaVero declaration & payment tracking with PDF export
 - **Finnish tax-aware accounts** — Arvo-osuustili, OST, ESPP, and Crypto account types
+- **Equity performance comparison** — Stock and ETF holdings are compared against the dividend-inclusive S&P 500 Total Return index in EUR; crypto is excluded
 - **Market news & alerts** — Price, earnings, rebalance, and news-triggered alerts
 - **Investment goals** — Track progress toward financial targets
 - **Mobile-responsive UI** — Works on desktop and mobile (Bearer-token auth fallback for browsers that block cross-site cookies)

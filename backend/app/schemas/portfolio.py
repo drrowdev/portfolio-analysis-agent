@@ -49,10 +49,10 @@ class PerformanceResponse(BaseModel):
     benchmark_ticker: str = "^SP500TR"
     currency: str = "EUR"
     methodology: str = (
-        "Time-weighted market return of recorded invested holdings in EUR, using "
+        "Time-weighted market return of recorded stock and ETF holdings in EUR, using "
         "raw closes for market-value weights and adjusted-close relatives for total "
-        "returns. Position changes are neutralized at the daily close; cash, fees, "
-        "and taxes are excluded."
+        "returns. Crypto is excluded. Position changes are neutralized at the daily "
+        "close; cash, fees, and taxes are excluded."
     )
     warnings: list[str] = Field(default_factory=list)
     data: list[PerformanceDataPoint]

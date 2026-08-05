@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.account import Account
+from app.models.account import Account, AccountType
 from app.models.holding import Holding
 from app.models.transaction import Transaction
 from app.schemas.portfolio import (
@@ -28,6 +28,7 @@ from app.schemas.portfolio import (
     PortfolioSummary,
 )
 from app.services.market_data import _yf_symbol as _yf_symbol_lookup
+from app.services import symbol_metadata as symbol_metadata_service
 
 logger = logging.getLogger(__name__)
 
@@ -35,22 +36,33 @@ BENCHMARK_NAME = "S&P 500 Total Return"
 BENCHMARK_TICKER = "^SP500TR"
 PERFORMANCE_CURRENCY = "EUR"
 PERFORMANCE_METHODOLOGY = (
-    "Time-weighted market return of recorded invested holdings in EUR, using "
+    "Time-weighted market return of recorded stock and ETF holdings in EUR, using "
     "raw closes for market-value weights and adjusted-close relatives for total "
-    "returns. Position changes are neutralized at the daily close; cash, fees, "
-    "and taxes are excluded."
+    "returns. Crypto is excluded. Position changes are neutralized at the daily "
+    "close; cash, fees, and taxes are excluded."
 )
 _PRICE_LOOKBACK_DAYS = 14
 _MAX_DATA_STALENESS_DAYS = 7
 _POSITION_EPSILON = 1e-8
 _RECONCILIATION_TOLERANCE = _POSITION_EPSILON
-_PERFORMANCE_CACHE_PREFIX = "performance-v5-"
+_PERFORMANCE_CACHE_PREFIX = "performance-v6-"
 _ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 _SPLIT_ADJUSTMENT_NOTE_MARKERS = ("RAHASTOANTI",)
 
 # In-memory cache: key -> (timestamp, source fingerprint, data)
 _performance_cache: dict[str, tuple[float, str, PerformanceResponse]] = {}
 _CACHE_TTL = 2 * 60 * 60  # 2 hours
+
+
+def _include_performance_security(
+    account_id: Any,
+    symbol: str,
+    crypto_account_ids: set[str],
+) -> bool:
+    return (
+        str(account_id) not in crypto_account_ids
+        and not symbol_metadata_service.is_crypto(symbol)
+    )
 
 
 async def compute_portfolio_summary(db: AsyncSession) -> PortfolioSummary:
@@ -1517,11 +1529,27 @@ async def compute_performance_comparison(
 
     cache_key = f"{_PERFORMANCE_CACHE_PREFIX}{period.lower()}"
     now = time.time()
+    crypto_account_result = await db.execute(
+        select(Account.id).where(Account.account_type == AccountType.crypto)
+    )
+    crypto_account_ids = {
+        str(account_id)
+        for account_id in crypto_account_result.scalars().all()
+    }
 
-    # Load all transactions
+    # Load equity transactions only; crypto has its own performance semantics and
+    # is intentionally excluded from the S&P 500 comparison.
     stmt = select(Transaction).order_by(Transaction.date.asc())
     result = await db.execute(stmt)
-    txs = list(result.scalars().all())
+    txs = [
+        transaction
+        for transaction in result.scalars().all()
+        if _include_performance_security(
+            transaction.account_id,
+            transaction.symbol,
+            crypto_account_ids,
+        )
+    ]
 
     tx_dicts = [
         {
@@ -1547,9 +1575,17 @@ async def compute_performance_comparison(
             snapshot_date,
         )
 
-    # Load holdings for currency info and to detect missing transactions
+    # Load equity holdings for currency info and to detect missing transactions.
     h_result = await db.execute(select(Holding))
-    holdings = list(h_result.scalars().all())
+    holdings = [
+        holding
+        for holding in h_result.scalars().all()
+        if _include_performance_security(
+            holding.account_id,
+            holding.symbol,
+            crypto_account_ids,
+        )
+    ]
     h_dicts = [
         {
             "account_id": str(h.account_id),
