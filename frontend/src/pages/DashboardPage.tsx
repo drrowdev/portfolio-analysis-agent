@@ -133,7 +133,7 @@ export function DashboardPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium">
-            Invested Holdings vs S&amp;P 500
+            Stock Holdings vs S&amp;P 500
           </CardTitle>
         </CardHeader>
         <CardContent>

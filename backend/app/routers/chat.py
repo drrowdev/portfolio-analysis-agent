@@ -60,7 +60,7 @@ async def _build_full_context(db: AsyncSession) -> str:
             latest = perf.data[-1]
             parts.append(
                 f"\nPERFORMANCE (1Y):\n"
-                f"  Invested holdings TWRR ({perf.currency}): "
+                f"  Stock holdings TWRR ({perf.currency}): "
                 f"{latest.portfolio_return_pct:.1f}%\n"
                 f"  {perf.benchmark_name} return ({perf.currency}): "
                 f"{latest.sp500_return_pct:.1f}%"

@@ -100,6 +100,11 @@ def has_yahoo(symbol: str) -> bool:
     return bool(md and md.has_yahoo_news)
 
 
+def is_crypto(symbol: str) -> bool:
+    md = _cache.get(symbol)
+    return bool(md and md.is_crypto)
+
+
 def skip_in_aggregations(symbol: str) -> bool:
     md = _cache.get(symbol)
     return bool(md and md.skip_in_aggregations)
