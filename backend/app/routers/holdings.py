@@ -126,6 +126,7 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
                 currency=trade.currency,
                 exchange=trade.exchange,
                 total_quantity=trade.quantity,
+                snapshot_date=trade.trade_date or date.today(),
                 avg_cost_basis_eur=trade.price_per_share_eur,
                 total_cost_eur=total_cost,
                 avg_cost_basis_native=price_native,
