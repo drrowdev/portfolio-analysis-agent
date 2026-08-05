@@ -44,7 +44,7 @@ _PRICE_LOOKBACK_DAYS = 14
 _MAX_DATA_STALENESS_DAYS = 7
 _POSITION_EPSILON = 1e-8
 _RECONCILIATION_TOLERANCE = _POSITION_EPSILON
-_PERFORMANCE_CACHE_PREFIX = "performance-v3-"
+_PERFORMANCE_CACHE_PREFIX = "performance-v4-"
 _ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 # In-memory cache: key -> (timestamp, source fingerprint, data)
@@ -607,6 +607,11 @@ def _compute_performance_sync(
     ``holdings_info`` – list of dicts with keys: symbol, currency, total_quantity, snapshot_date
     """
     warnings = list(warnings or [])
+    today = date.today()
+
+    def _position_key(row: dict[str, Any]) -> tuple[str, str]:
+        return str(row.get("account_id", "")), str(row["symbol"])
+
     position_transactions = [
         transaction
         for transaction in transactions
@@ -616,15 +621,31 @@ def _compute_performance_sync(
         )
         and abs(float(transaction["quantity"])) > _POSITION_EPSILON
     ]
-    holding_snapshot_dates = [
-        (
+    for transaction in position_transactions:
+        if transaction["date"] > today:
+            raise PerformanceDataUnavailableError(
+                f"{transaction['symbol']} has a future-dated position change."
+            )
+    transaction_position_keys = {
+        _position_key(transaction)
+        for transaction in position_transactions
+    }
+    holding_snapshot_dates: list[date] = []
+    for holding in holdings_info:
+        snapshot_date = (
             holding["snapshot_date"].date()
             if isinstance(holding.get("snapshot_date"), datetime)
-            else holding.get("snapshot_date") or date.today()
+            else holding.get("snapshot_date") or today
         )
-        for holding in holdings_info
-        if float(holding.get("total_quantity", 0)) > _POSITION_EPSILON
-    ]
+        if snapshot_date > today:
+            raise PerformanceDataUnavailableError(
+                f"{holding['symbol']} has a future-dated holding snapshot."
+            )
+        if (
+            float(holding.get("total_quantity", 0)) > _POSITION_EPSILON
+            or _position_key(holding) in transaction_position_keys
+        ):
+            holding_snapshot_dates.append(snapshot_date)
     source_dates = [
         transaction["date"]
         for transaction in position_transactions
@@ -640,27 +661,133 @@ def _compute_performance_sync(
     transactions = sorted(transactions, key=lambda t: t["date"])
     earliest_source_date = min(source_dates)
     start = _resolve_period(period, earliest_source_date)
-    today = date.today()
     end = today + timedelta(days=1)  # yfinance end is exclusive
 
     if start < earliest_source_date:
         start = earliest_source_date
-
-    def _position_key(row: dict[str, Any]) -> tuple[str, str]:
-        return str(row.get("account_id", "")), str(row["symbol"])
 
     base_relevant_positions: set[tuple[str, str]] | None = None
     if period.lower() != "all":
         base_relevant_positions = {
             _position_key(holding)
             for holding in holdings_info
-            if float(holding.get("total_quantity", 0)) > _POSITION_EPSILON
+            if (
+                float(holding.get("total_quantity", 0)) > _POSITION_EPSILON
+                or _position_key(holding) in transaction_position_keys
+            )
         }
         base_relevant_positions.update(
             _position_key(transaction)
             for transaction in position_transactions
             if transaction["date"] >= start
         )
+        position_transactions = [
+            transaction
+            for transaction in position_transactions
+            if _position_key(transaction) in base_relevant_positions
+        ]
+        transactions = [
+            transaction
+            for transaction in transactions
+            if (
+                transaction["transaction_type"] not in _POSITION_INCREASE_TYPES
+                and transaction["transaction_type"] not in _POSITION_DECREASE_TYPES
+            )
+            or _position_key(transaction) in base_relevant_positions
+        ]
+        holdings_info = [
+            holding
+            for holding in holdings_info
+            if _position_key(holding) in base_relevant_positions
+        ]
+
+    holding_position_keys = {
+        _position_key(holding)
+        for holding in holdings_info
+    }
+
+    def _unreconciled_orphan_positions(
+        rows: list[dict[str, Any]],
+    ) -> set[tuple[str, str]]:
+        deltas: dict[
+            tuple[str, str],
+            dict[date, float],
+        ] = defaultdict(lambda: defaultdict(float))
+        for transaction in rows:
+            if transaction["transaction_type"] in _POSITION_INCREASE_TYPES:
+                direction = 1.0
+            elif transaction["transaction_type"] in _POSITION_DECREASE_TYPES:
+                direction = -1.0
+            else:
+                continue
+            deltas[_position_key(transaction)][transaction["date"]] += (
+                direction * float(transaction["quantity"])
+            )
+
+        unreconciled: set[tuple[str, str]] = set()
+        for position_key, daily_deltas in deltas.items():
+            if position_key in holding_position_keys:
+                continue
+            running_quantity = 0.0
+            for transaction_date in sorted(daily_deltas):
+                running_quantity += daily_deltas[transaction_date]
+                if running_quantity < -_RECONCILIATION_TOLERANCE:
+                    unreconciled.add(position_key)
+                    break
+            if abs(running_quantity) > _RECONCILIATION_TOLERANCE:
+                unreconciled.add(position_key)
+        return unreconciled
+
+    omitted_unreconciled_positions: set[tuple[str, str]] = set()
+
+    def _append_omitted_history_warning() -> None:
+        if not omitted_unreconciled_positions:
+            return
+        omitted_symbols = ", ".join(
+            sorted({
+                symbol
+                for _, symbol in omitted_unreconciled_positions
+            })
+        )
+        warnings.append(
+            "Omitted incomplete transaction histories for "
+            f"{omitted_symbols} because they do not reconcile to the current "
+            "holdings snapshot."
+        )
+
+    if base_relevant_positions is not None:
+        directions_by_position: dict[
+            tuple[str, str],
+            set[int],
+        ] = defaultdict(set)
+        for transaction in position_transactions:
+            if transaction["transaction_type"] in _POSITION_INCREASE_TYPES:
+                direction = 1
+            elif transaction["transaction_type"] in _POSITION_DECREASE_TYPES:
+                direction = -1
+            else:
+                continue
+            directions_by_position[_position_key(transaction)].add(direction)
+        omitted_unreconciled_positions.update(
+            position_key
+            for position_key, directions in directions_by_position.items()
+            if position_key not in holding_position_keys and len(directions) == 1
+        )
+        position_transactions = [
+            transaction
+            for transaction in position_transactions
+            if _position_key(transaction) not in omitted_unreconciled_positions
+        ]
+        transactions = [
+            transaction
+            for transaction in transactions
+            if (
+                transaction["transaction_type"] not in _POSITION_INCREASE_TYPES
+                and transaction["transaction_type"] not in _POSITION_DECREASE_TYPES
+            )
+            or _position_key(transaction)
+            not in omitted_unreconciled_positions
+        ]
 
     # Collect unique position symbols and reject ambiguous currency metadata.
     symbol_currencies: dict[str, str] = {}
@@ -685,6 +812,7 @@ def _compute_performance_sync(
 
     symbols = list(symbol_currencies.keys())
     if not symbols:
+        _append_omitted_history_warning()
         return PerformanceResponse(
             period=period,
             start_date=start,
@@ -783,51 +911,16 @@ def _compute_performance_sync(
                 and not adjusted_close[yahoo_symbol].dropna().empty
             )
         }
-        relevant_positions = base_relevant_positions | {
-            _position_key(transaction)
-            for transaction in position_transactions
-            if transaction["symbol"] in priced_symbols
-        }
-        position_transactions = [
-            transaction
-            for transaction in position_transactions
-            if _position_key(transaction) in relevant_positions
-        ]
-        transactions = [
-            transaction
-            for transaction in transactions
-            if (
-                transaction["transaction_type"] not in _POSITION_INCREASE_TYPES
-                and transaction["transaction_type"] not in _POSITION_DECREASE_TYPES
-            )
-            or _position_key(transaction) in relevant_positions
-        ]
-        holdings_info = [
-            holding
-            for holding in holdings_info
-            if _position_key(holding) in relevant_positions
-        ]
         unpriced_symbols = {
             row["symbol"]
             for row in [*position_transactions, *holdings_info]
-            if (
-                _position_key(row) in base_relevant_positions
-                and row["symbol"] not in priced_symbols
-            )
+            if row["symbol"] not in priced_symbols
         }
         if unpriced_symbols:
             missing = ", ".join(sorted(unpriced_symbols))
             raise PerformanceDataUnavailableError(
                 f"Historical prices are unavailable for {missing}."
             )
-
-    retained_symbols = {
-        transaction["symbol"]
-        for transaction in position_transactions
-    } | {
-        holding["symbol"]
-        for holding in holdings_info
-    }
 
     split_basis_dates: dict[str, date] = {}
     for transaction in position_transactions:
@@ -843,8 +936,6 @@ def _compute_performance_sync(
             basis_date,
         )
     for holding in holdings_info:
-        if float(holding.get("total_quantity", 0)) <= _POSITION_EPSILON:
-            continue
         yahoo_symbol = sym_to_yf[holding["symbol"]]
         snapshot_date = holding.get("snapshot_date") or date.today()
         if isinstance(snapshot_date, datetime):
@@ -958,10 +1049,50 @@ def _compute_performance_sync(
         split_events,
         sym_to_yf,
     )
+    if base_relevant_positions is not None:
+        adjusted_position_transactions = [
+            transaction
+            for transaction in transactions
+            if (
+                transaction["transaction_type"] in _POSITION_INCREASE_TYPES
+                or transaction["transaction_type"] in _POSITION_DECREASE_TYPES
+            )
+            and abs(float(transaction["quantity"])) > _POSITION_EPSILON
+        ]
+        omitted_unreconciled_positions.update(
+            _unreconciled_orphan_positions(adjusted_position_transactions)
+        )
+        if omitted_unreconciled_positions:
+            transactions = [
+                transaction
+                for transaction in transactions
+                if (
+                    transaction["transaction_type"]
+                    not in _POSITION_INCREASE_TYPES
+                    and transaction["transaction_type"]
+                    not in _POSITION_DECREASE_TYPES
+                )
+                or _position_key(transaction)
+                not in omitted_unreconciled_positions
+            ]
+            _append_omitted_history_warning()
     warnings.extend(
         _add_opening_balance_transactions(transactions, holdings_info)
     )
     transactions.sort(key=lambda transaction: transaction["date"])
+
+    retained_symbols = {
+        transaction["symbol"]
+        for transaction in transactions
+        if (
+            transaction["transaction_type"] in _POSITION_INCREASE_TYPES
+            or transaction["transaction_type"] in _POSITION_DECREASE_TYPES
+        )
+        and abs(float(transaction["quantity"])) > _POSITION_EPSILON
+    } | {
+        holding["symbol"]
+        for holding in holdings_info
+    }
 
     if BENCHMARK_TICKER not in close.columns:
         raise PerformanceDataUnavailableError(
