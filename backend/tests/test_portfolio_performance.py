@@ -108,6 +108,91 @@ def test_uses_total_return_benchmark_and_common_zero_baseline(monkeypatch):
     assert [point.sp500_return_pct for point in response.data] == [0.0, 10.0, 21.0]
 
 
+def test_finite_period_ignores_unpriced_positions_closed_before_window(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    captured: dict[str, list[str]] = {}
+
+    def fake_download(tickers, **_kwargs):
+        captured["tickers"] = list(tickers)
+        return _market_frame(
+            [period_start, today],
+            {
+                "AAA": [100, 110],
+                "OLD": [50, 50],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+            adjusted_series={
+                "AAA": [100, 110],
+                "OLD": [None, None],
+                portfolio.BENCHMARK_TICKER: [200, 220],
+                "EURUSD=X": [2, 2],
+            },
+        )
+
+    monkeypatch.setattr(portfolio.yf, "download", fake_download)
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("OLD", today - timedelta(days=100), 1),
+            _transaction(
+                "OLD",
+                today - timedelta(days=90),
+                1,
+                transaction_type="sell",
+            ),
+            _transaction("AAA", period_start, 1),
+        ],
+        [_holding("AAA")],
+        "1m",
+    )
+
+    assert "OLD" in captured["tickers"]
+    assert response.data[-1].portfolio_return_pct == 10
+
+
+def test_finite_period_keeps_split_affected_zero_raw_holding(monkeypatch):
+    today = date.today()
+    period_start = today - timedelta(days=30)
+    buy_date = today - timedelta(days=40)
+    split_date = today - timedelta(days=35)
+    sell_date = today - timedelta(days=31)
+    dates = [buy_date, split_date, sell_date, period_start, today]
+    raw = _market_frame(
+        dates,
+        {
+            "AAA": [100, 55, 56, 57, 60],
+            portfolio.BENCHMARK_TICKER: [190, 195, 198, 200, 220],
+            "EURUSD=X": [2, 2, 2, 2, 2],
+        },
+        adjusted_series={
+            "AAA": [50, 55, 56, 57, 60],
+            portfolio.BENCHMARK_TICKER: [190, 195, 198, 200, 220],
+            "EURUSD=X": [2, 2, 2, 2, 2],
+        },
+    )
+    raw[("Stock Splits", "AAA")] = [0, 2, 0, 0, 0]
+    raw = raw.sort_index(axis=1)
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: raw,
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("AAA", buy_date, 1),
+            _transaction("AAA", sell_date, 1, transaction_type="sell"),
+        ],
+        [_holding("AAA", quantity=0, snapshot_date=buy_date)],
+        "1m",
+    )
+
+    assert response.data[0].portfolio_value_eur == 57
+    assert response.data[-1].portfolio_return_pct == pytest.approx(5.26)
+
+
 def test_weights_total_returns_by_actual_market_value(monkeypatch):
     start = date.today() - timedelta(days=3)
     dates = [start, start + timedelta(days=1)]

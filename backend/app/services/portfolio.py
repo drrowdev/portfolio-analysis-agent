@@ -646,6 +646,22 @@ def _compute_performance_sync(
     if start < earliest_source_date:
         start = earliest_source_date
 
+    def _position_key(row: dict[str, Any]) -> tuple[str, str]:
+        return str(row.get("account_id", "")), str(row["symbol"])
+
+    base_relevant_positions: set[tuple[str, str]] | None = None
+    if period.lower() != "all":
+        base_relevant_positions = {
+            _position_key(holding)
+            for holding in holdings_info
+            if float(holding.get("total_quantity", 0)) > _POSITION_EPSILON
+        }
+        base_relevant_positions.update(
+            _position_key(transaction)
+            for transaction in position_transactions
+            if transaction["date"] >= start
+        )
+
     # Collect unique position symbols and reject ambiguous currency metadata.
     symbol_currencies: dict[str, str] = {}
 
@@ -755,6 +771,63 @@ def _compute_performance_sync(
         "Stock Splits",
         all_tickers[0],
     ).sort_index()
+
+    if base_relevant_positions is not None:
+        priced_symbols = {
+            symbol
+            for symbol, yahoo_symbol in sym_to_yf.items()
+            if (
+                yahoo_symbol in close.columns
+                and not close[yahoo_symbol].dropna().empty
+                and yahoo_symbol in adjusted_close.columns
+                and not adjusted_close[yahoo_symbol].dropna().empty
+            )
+        }
+        relevant_positions = base_relevant_positions | {
+            _position_key(transaction)
+            for transaction in position_transactions
+            if transaction["symbol"] in priced_symbols
+        }
+        position_transactions = [
+            transaction
+            for transaction in position_transactions
+            if _position_key(transaction) in relevant_positions
+        ]
+        transactions = [
+            transaction
+            for transaction in transactions
+            if (
+                transaction["transaction_type"] not in _POSITION_INCREASE_TYPES
+                and transaction["transaction_type"] not in _POSITION_DECREASE_TYPES
+            )
+            or _position_key(transaction) in relevant_positions
+        ]
+        holdings_info = [
+            holding
+            for holding in holdings_info
+            if _position_key(holding) in relevant_positions
+        ]
+        unpriced_symbols = {
+            row["symbol"]
+            for row in [*position_transactions, *holdings_info]
+            if (
+                _position_key(row) in base_relevant_positions
+                and row["symbol"] not in priced_symbols
+            )
+        }
+        if unpriced_symbols:
+            missing = ", ".join(sorted(unpriced_symbols))
+            raise PerformanceDataUnavailableError(
+                f"Historical prices are unavailable for {missing}."
+            )
+
+    retained_symbols = {
+        transaction["symbol"]
+        for transaction in position_transactions
+    } | {
+        holding["symbol"]
+        for holding in holdings_info
+    }
 
     split_basis_dates: dict[str, date] = {}
     for transaction in position_transactions:
@@ -902,7 +975,8 @@ def _compute_performance_sync(
     ).sort_values()
     observed_close = close.reindex(analysis_index)
     observed_adjusted_close = adjusted_close.reindex(analysis_index)
-    for symbol, yahoo_symbol in sym_to_yf.items():
+    for symbol in retained_symbols:
+        yahoo_symbol = sym_to_yf[symbol]
         if (
             yahoo_symbol not in observed_close.columns
             or yahoo_symbol not in observed_adjusted_close.columns
