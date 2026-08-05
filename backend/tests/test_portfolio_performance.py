@@ -347,7 +347,7 @@ def test_finite_period_keeps_split_reconciled_closed_history(monkeypatch):
     raw = _market_frame(
         [period_start, split_date, today],
         {
-            "CLOSED": [100, 55, 60],
+            "CLOSED": [50, 55, 60],
             portfolio.BENCHMARK_TICKER: [200, 210, 220],
             "EURUSD=X": [2, 2, 2],
         },
@@ -721,7 +721,7 @@ def test_pre_split_transactions_use_current_share_basis(monkeypatch):
     raw = _market_frame(
         [start, split_date, final_date],
         {
-            "AAA": [100, 55, 60],
+            "AAA": [50, 55, 60],
             portfolio.BENCHMARK_TICKER: [100, 110, 120],
             "EURUSD=X": [2, 2, 2],
         },
@@ -761,7 +761,7 @@ def test_nordnet_lot_quantities_are_not_split_adjusted_twice(monkeypatch):
     raw = _market_frame(
         [start, split_date, final_date],
         {
-            "AAA": [100, 55, 60],
+            "AAA": [50, 55, 60],
             portfolio.BENCHMARK_TICKER: [100, 110, 120],
             "EURUSD=X": [2, 2, 2],
         },
@@ -794,6 +794,49 @@ def test_nordnet_lot_quantities_are_not_split_adjusted_twice(monkeypatch):
 
     assert response.warnings == []
     assert response.data[0].portfolio_value_eur == 100.0
+
+
+def test_bonus_issue_adjustment_and_duplicate_split_are_not_double_counted(
+    monkeypatch,
+):
+    start = date.today() - timedelta(days=6)
+    split_date = start + timedelta(days=1)
+    bonus_record_date = start + timedelta(days=3)
+    later_buy_date = start + timedelta(days=4)
+    final_date = start + timedelta(days=5)
+    raw = _market_frame(
+        [start, split_date, bonus_record_date, later_buy_date, final_date],
+        {
+            "AAA": [8, 8.1, 8, 8.1, 8.2],
+            portfolio.BENCHMARK_TICKER: [100, 101, 102, 103, 104],
+            "EURUSD=X": [2, 2, 2, 2, 2],
+        },
+    )
+    raw[("Stock Splits", "AAA")] = [0, 5, 4, 0, 0]
+    raw = raw.sort_index(axis=1)
+    monkeypatch.setattr(
+        portfolio.yf,
+        "download",
+        lambda *_args, **_kwargs: raw,
+    )
+
+    response = portfolio._compute_performance_sync(
+        [
+            _transaction("AAA", start, 201),
+            _transaction(
+                "AAA",
+                split_date,
+                804,
+                notes="Position adjustment: RAHASTOANTI AP JÄTTÖ",
+            ),
+            _transaction("AAA", later_buy_date, 158),
+        ],
+        [_holding("AAA", quantity=1163, snapshot_date=start)],
+        "all",
+    )
+
+    assert response.warnings == []
+    assert response.data[-1].portfolio_value_eur == pytest.approx(9536.6)
 
 
 def test_finite_period_fetches_splits_older_than_price_window(monkeypatch):
@@ -1542,25 +1585,17 @@ def test_holding_split_normalization_excludes_later_trade_quantity():
     assert adjusted[0]["total_quantity"] == 3
 
 
-def test_split_adjusted_closes_deduplicate_yahoo_aliases():
-    start = date.today() - timedelta(days=2)
-    split_date = date.today() - timedelta(days=1)
-    close = pd.DataFrame(
-        {"AAA": [100, 55]},
-        index=pd.to_datetime([start, split_date]),
-    )
+def test_split_events_collapse_total_and_bonus_share_ratios():
+    split_date = date.today() - timedelta(days=3)
+    bonus_record_date = date.today() - timedelta(days=1)
     split_events = pd.DataFrame(
-        {"AAA": [0, 2]},
-        index=close.index,
+        {"AAA": [5, 4]},
+        index=pd.to_datetime([split_date, bonus_record_date]),
     )
 
-    adjusted = portfolio._split_adjusted_market_closes(
-        close,
-        split_events,
-        ["AAA", "AAA"],
-    )
+    adjusted = portfolio._deduplicate_split_events(split_events)
 
-    assert adjusted["AAA"].tolist() == [50, 55]
+    assert adjusted["AAA"].tolist() == [5, 0]
 
 
 def test_small_fractional_holding_is_not_ignored():

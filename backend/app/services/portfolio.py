@@ -44,8 +44,9 @@ _PRICE_LOOKBACK_DAYS = 14
 _MAX_DATA_STALENESS_DAYS = 7
 _POSITION_EPSILON = 1e-8
 _RECONCILIATION_TOLERANCE = _POSITION_EPSILON
-_PERFORMANCE_CACHE_PREFIX = "performance-v4-"
+_PERFORMANCE_CACHE_PREFIX = "performance-v5-"
 _ISO_DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
+_SPLIT_ADJUSTMENT_NOTE_MARKERS = ("RAHASTOANTI",)
 
 # In-memory cache: key -> (timestamp, source fingerprint, data)
 _performance_cache: dict[str, tuple[float, str, PerformanceResponse]] = {}
@@ -449,6 +450,16 @@ def _split_factor_after(
     return split_factor
 
 
+def _is_provider_normalized_split_adjustment(
+    transaction: dict[str, Any],
+) -> bool:
+    notes = str(transaction.get("notes", "")).upper()
+    return notes.startswith("POSITION ADJUSTMENT:") and any(
+        marker in notes
+        for marker in _SPLIT_ADJUSTMENT_NOTE_MARKERS
+    )
+
+
 def _adjust_transactions_for_splits(
     transactions: list[dict[str, Any]],
     split_events: pd.DataFrame,
@@ -457,6 +468,8 @@ def _adjust_transactions_for_splits(
     """Convert transaction quantities to the current split-adjusted share basis."""
     adjusted: list[dict[str, Any]] = []
     for transaction in transactions:
+        if _is_provider_normalized_split_adjustment(transaction):
+            continue
         yahoo_symbol = symbol_to_yahoo.get(transaction["symbol"])
         notes = str(transaction.get("notes", ""))
         basis_date = (
@@ -476,6 +489,29 @@ def _adjust_transactions_for_splits(
             }
         )
     return adjusted
+
+
+def _deduplicate_split_events(split_events: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a total split ratio plus its nearby bonus-share ratio."""
+    deduplicated = split_events.copy()
+    for ticker in deduplicated.columns:
+        events = [
+            (timestamp, float(ratio))
+            for timestamp, ratio in deduplicated[ticker].dropna().items()
+            if float(ratio) > 1
+        ]
+        for index, (timestamp, ratio) in enumerate(events):
+            for other_timestamp, other_ratio in events[index + 1:]:
+                if (other_timestamp.date() - timestamp.date()).days > 7:
+                    break
+                larger = max(ratio, other_ratio)
+                smaller = min(ratio, other_ratio)
+                if abs(larger - (smaller + 1)) <= _POSITION_EPSILON:
+                    duplicate_timestamp = (
+                        timestamp if ratio == smaller else other_timestamp
+                    )
+                    deduplicated.at[duplicate_timestamp, ticker] = 0.0
+    return deduplicated
 
 
 def _adjust_holdings_for_splits(
@@ -546,9 +582,10 @@ def _adjust_holdings_for_splits(
                 split_events,
             )
             raw_post_snapshot_delta += direction * quantity
-            adjusted_post_snapshot_delta += (
-                direction * quantity * transaction_split_factor
-            )
+            if not _is_provider_normalized_split_adjustment(transaction):
+                adjusted_post_snapshot_delta += (
+                    direction * quantity * transaction_split_factor
+                )
 
         raw_holding_quantity = sum(
             float(holding.get("total_quantity", 0))
@@ -575,26 +612,6 @@ def _adjust_holdings_for_splits(
     return adjusted
 
 
-def _split_adjusted_market_closes(
-    close: pd.DataFrame,
-    split_events: pd.DataFrame,
-    yahoo_symbols: list[str],
-) -> pd.DataFrame:
-    """Normalize raw closes to the current share basis without adding dividends."""
-    adjusted = close.copy()
-    for yahoo_symbol in dict.fromkeys(yahoo_symbols):
-        if (
-            yahoo_symbol not in adjusted.columns
-            or yahoo_symbol not in split_events.columns
-        ):
-            continue
-        for timestamp, ratio in split_events[yahoo_symbol].dropna().items():
-            ratio_value = float(ratio)
-            if ratio_value > 0:
-                adjusted.loc[adjusted.index < timestamp, yahoo_symbol] /= ratio_value
-    return adjusted
-
-
 def _compute_performance_sync(
     transactions: list[dict[str, Any]],
     holdings_info: list[dict[str, Any]],
@@ -612,6 +629,15 @@ def _compute_performance_sync(
     def _position_key(row: dict[str, Any]) -> tuple[str, str]:
         return str(row.get("account_id", "")), str(row["symbol"])
 
+    for transaction in transactions:
+        is_position_change = (
+            transaction["transaction_type"] in _POSITION_INCREASE_TYPES
+            or transaction["transaction_type"] in _POSITION_DECREASE_TYPES
+        ) and abs(float(transaction["quantity"])) > _POSITION_EPSILON
+        if is_position_change and transaction["date"] > today:
+            raise PerformanceDataUnavailableError(
+                f"{transaction['symbol']} has a future-dated position change."
+            )
     position_transactions = [
         transaction
         for transaction in transactions
@@ -620,12 +646,8 @@ def _compute_performance_sync(
             or transaction["transaction_type"] in _POSITION_DECREASE_TYPES
         )
         and abs(float(transaction["quantity"])) > _POSITION_EPSILON
+        and not _is_provider_normalized_split_adjustment(transaction)
     ]
-    for transaction in position_transactions:
-        if transaction["date"] > today:
-            raise PerformanceDataUnavailableError(
-                f"{transaction['symbol']} has a future-dated position change."
-            )
     transaction_position_keys = {
         _position_key(transaction)
         for transaction in position_transactions
@@ -1032,11 +1054,7 @@ def _compute_performance_sync(
         split_events = split_events[
             ~split_events.index.duplicated(keep="last")
         ]
-    close = _split_adjusted_market_closes(
-        close,
-        split_events,
-        list(dict.fromkeys(sym_to_yf.values())),
-    )
+    split_events = _deduplicate_split_events(split_events)
 
     holdings_info = _adjust_holdings_for_splits(
         holdings_info,
