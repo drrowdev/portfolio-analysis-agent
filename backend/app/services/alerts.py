@@ -90,6 +90,10 @@ async def generate_alerts_from_analysis(
     db: AsyncSession, analysis: dict[str, Any]
 ) -> None:
     """Create alerts from Claude analysis results."""
+    if analysis.get("meta", {}).get("mode") == "shadow":
+        logger.info("Skipping alerts for shadow-mode analysis")
+        return
+
     for rec in analysis.get("recommendations", []):
         if rec.get("priority") == "high":
             await create_alert(

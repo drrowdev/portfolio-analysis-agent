@@ -9,11 +9,18 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.models import Base
+from app.models.account import Account, AccountType, TaxTreatment
 from app.models.cache import CacheEntry
 from app.models.holding import Holding
+from app.models.transaction import Transaction, TransactionType
 from app.routers import upload as upload_router
 from app.services import portfolio
-from app.services.csv_parser import FidelityHolding, FidelityParseResult
+from app.services.csv_parser import (
+    FidelityHolding,
+    FidelityParseResult,
+    FidelityTransaction,
+)
 
 
 def _market_frame(
@@ -811,7 +818,10 @@ def test_nordnet_lot_quantities_are_not_split_adjusted_twice(monkeypatch):
                 "AAA",
                 start,
                 2,
-                notes="Imported from Nordnet lot export (2026-08-05)",
+                notes=(
+                    "Imported from Nordnet lot export "
+                    f"({final_date.isoformat()})"
+                ),
             )
         ],
         [_holding(quantity=2, snapshot_date=final_date)],
@@ -1764,3 +1774,192 @@ async def test_transaction_free_fidelity_import_persists_statement_date(monkeypa
 
     holding = next(value for value in session.added if isinstance(value, Holding))
     assert holding.snapshot_date == period_end
+
+
+@pytest.mark.asyncio
+async def test_fidelity_overlap_merge_preserves_history_and_latest_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    database_path = str(tmp_path / "fidelity-merge.db").replace("\\", "/")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as session:
+        account = Account(
+            name="Fidelity ESPP",
+            broker="fidelity",
+            account_type=AccountType.espp,
+            external_id="participant",
+            currency="USD",
+            tax_treatment=TaxTreatment.espp,
+        )
+        session.add(account)
+        await session.flush()
+        session.add_all(
+            [
+                Holding(
+                    account_id=account.id,
+                    symbol="MSFT",
+                    isin="US5949181045",
+                    instrument_name="Microsoft",
+                    currency="USD",
+                    total_quantity=Decimal("5"),
+                    snapshot_date=date(2025, 6, 30),
+                    avg_cost_basis_eur=Decimal("90"),
+                    total_cost_eur=Decimal("450"),
+                ),
+                Transaction(
+                    account_id=account.id,
+                    symbol="MSFT",
+                    isin="US5949181045",
+                    instrument_name="Microsoft",
+                    currency="USD",
+                    transaction_type=TransactionType.espp_purchase,
+                    date=date(2025, 1, 15),
+                    quantity=Decimal("1"),
+                    price_native=Decimal("500"),
+                    price_eur=Decimal("450"),
+                    total_native=Decimal("500"),
+                    total_eur=Decimal("450"),
+                    notes=(
+                        "Fidelity espp_purchase "
+                        "(2025-01-01 - 2025-06-30)"
+                    ),
+                ),
+                Transaction(
+                    account_id=account.id,
+                    symbol="CASH",
+                    isin="",
+                    instrument_name="Manual deposit",
+                    currency="EUR",
+                    transaction_type=TransactionType.deposit,
+                    date=date(2024, 1, 1),
+                    quantity=Decimal("0"),
+                    price_native=Decimal("0"),
+                    price_eur=Decimal("0"),
+                    total_native=Decimal("100"),
+                    total_eur=Decimal("100"),
+                    notes="Manual entry",
+                ),
+            ]
+        )
+        await session.commit()
+
+    def parsed_statement(december_amount: str) -> FidelityParseResult:
+        return FidelityParseResult(
+            participant_number="participant",
+            period_start=date(2024, 7, 1),
+            period_end=date(2025, 3, 31),
+            account_value_usd=Decimal("200"),
+            holdings=[
+                FidelityHolding(
+                    symbol="MSFT",
+                    name="Microsoft",
+                    quantity=Decimal("2"),
+                    price_usd=Decimal("100"),
+                    market_value_usd=Decimal("200"),
+                    cost_basis_usd=Decimal("180"),
+                    unrealized_gain_usd=Decimal("20"),
+                )
+            ],
+            transactions=[
+                FidelityTransaction(
+                    date=date(2025, 1, 15),
+                    symbol="MSFT",
+                    name="Microsoft",
+                    transaction_type="espp_purchase",
+                    quantity=Decimal("1"),
+                    price_usd=Decimal("500"),
+                    amount_usd=Decimal("500"),
+                    cost_basis_usd=None,
+                ),
+                FidelityTransaction(
+                    date=date(2024, 12, 1),
+                    symbol="MSFT",
+                    name="Microsoft",
+                    transaction_type="dividend",
+                    quantity=None,
+                    price_usd=None,
+                    amount_usd=Decimal(december_amount),
+                    cost_basis_usd=None,
+                ),
+            ],
+        )
+
+    current_statement = [parsed_statement("100")]
+
+    async def fake_parse(_content: bytes) -> FidelityParseResult:
+        return current_statement[0]
+
+    async def fake_convert(_db, _symbol):
+        return {"total_transactions": 0}
+
+    class FakeUpload:
+        async def read(self) -> bytes:
+            return b"statement"
+
+    monkeypatch.setattr(upload_router, "parse_fidelity_pdf", fake_parse)
+    monkeypatch.setattr(
+        upload_router.fx_convert,
+        "convert_symbol_to_eur",
+        fake_convert,
+    )
+
+    async with session_factory() as session:
+        first = await upload_router.upload_fidelity_pdf(FakeUpload(), session)
+        await session.commit()
+
+    assert first["holdings_created"] == 0
+    assert first["transactions_imported"] == 1
+    assert first["duplicate_transactions_skipped"] == 1
+
+    current_statement[0] = parsed_statement("120")
+    async with session_factory() as session:
+        second = await upload_router.upload_fidelity_pdf(FakeUpload(), session)
+        await session.commit()
+        holdings = list((await session.execute(select(Holding))).scalars())
+        transactions = list(
+            (await session.execute(select(Transaction))).scalars()
+        )
+
+    assert second["holdings_created"] == 0
+    assert second["transactions_imported"] == 1
+    assert second["duplicate_transactions_skipped"] == 1
+    assert len(holdings) == 1
+    assert holdings[0].snapshot_date == date(2025, 6, 30)
+    assert holdings[0].total_quantity == Decimal("5")
+    assert len(transactions) == 3
+    assert any(transaction.notes == "Manual entry" for transaction in transactions)
+    december = next(
+        transaction
+        for transaction in transactions
+        if transaction.date == date(2024, 12, 1)
+    )
+    assert december.total_native == Decimal("120")
+
+    current_statement[0] = FidelityParseResult(
+        participant_number="participant",
+        period_start=date(2025, 7, 1),
+        period_end=date(2025, 12, 31),
+        account_value_usd=Decimal("0"),
+        holdings=[],
+        transactions=[],
+    )
+    async with session_factory() as session:
+        await upload_router.upload_fidelity_pdf(FakeUpload(), session)
+        await session.commit()
+
+    current_statement[0] = parsed_statement("120")
+    async with session_factory() as session:
+        older = await upload_router.upload_fidelity_pdf(FakeUpload(), session)
+        await session.commit()
+        holdings = list((await session.execute(select(Holding))).scalars())
+        account = (await session.execute(select(Account))).scalar_one()
+
+    assert older["holdings_created"] == 0
+    assert holdings == []
+    assert account.last_holdings_snapshot_date == date(2025, 12, 31)
+    await engine.dispose()

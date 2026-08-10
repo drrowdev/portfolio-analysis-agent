@@ -1,4 +1,4 @@
-"""Background scheduler for periodic market data, news, and analysis jobs."""
+"""Background scheduler for market data, news, and evidence-maintenance jobs."""
 
 import logging
 
@@ -45,20 +45,20 @@ async def poll_news_job() -> None:
         logger.exception("[scheduler] News poll failed")
 
 
-async def daily_analysis_job() -> None:
-    """Run daily portfolio summary after Helsinki market opens."""
-    from app.services.analysis import daily_summary
-    from app.services.alerts import generate_alerts_from_analysis
+async def evaluate_shadow_outcomes_job() -> None:
+    """Record all newly observable shadow recommendation horizons."""
+    from app.services.analysis_outcomes import evaluate_due_outcomes
 
-    logger.info("[scheduler] Running daily analysis …")
+    logger.info("[scheduler] Evaluating shadow recommendation outcomes …")
     try:
         async with async_session_factory() as session:
-            result = await daily_summary(session)
-            await generate_alerts_from_analysis(session, result)
-            await session.commit()
-            logger.info("[scheduler] Daily analysis complete")
+            recorded = await evaluate_due_outcomes(session)
+            logger.info(
+                "[scheduler] Shadow outcome evaluation complete — %d recorded",
+                recorded,
+            )
     except Exception:
-        logger.exception("[scheduler] Daily analysis failed")
+        logger.exception("[scheduler] Shadow outcome evaluation failed")
 
 
 async def check_dividends_job() -> None:
@@ -129,14 +129,18 @@ def setup_scheduler() -> None:
         replace_existing=True,
     )
 
-    # Daily analysis: 07:15 UTC weekdays (10:15 EEST, 15 min after Helsinki open)
+    # Model analysis is optional and user-triggered. Core portfolio refreshes and
+    # risk checks never depend on an AI provider.
+
+    # Outcome marks: weekdays at 18:30 New York time, after adjusted closes settle.
     scheduler.add_job(
-        daily_analysis_job,
+        evaluate_shadow_outcomes_job,
         "cron",
         day_of_week="mon-fri",
-        hour=7,
-        minute=15,
-        id="daily_analysis",
+        hour=18,
+        minute=30,
+        timezone="America/New_York",
+        id="shadow_outcome_evaluation",
         replace_existing=True,
     )
 

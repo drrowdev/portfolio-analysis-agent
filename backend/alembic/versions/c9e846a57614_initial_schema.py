@@ -29,8 +29,8 @@ def upgrade() -> None:
     sa.Column('currency', sa.String(length=3), nullable=False),
     sa.Column('tax_treatment', sa.Enum('standard', 'deferred', 'espp', name='taxtreatment'), nullable=False),
     sa.Column('ost_lifetime_deposits', sa.Numeric(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('alerts',
@@ -42,14 +42,14 @@ def upgrade() -> None:
     sa.Column('status', sa.Enum('new', 'read', 'dismissed', name='alertstatus'), nullable=False),
     sa.Column('related_symbol', sa.String(length=20), nullable=True),
     sa.Column('metadata', sa.JSON(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('analysis_history',
     sa.Column('id', sa.Uuid(), nullable=False),
     sa.Column('analysis_type', sa.Enum('daily_summary', 'rebalance', 'tax_optimization', 'news_impact', 'strategy_review', name='analysistype'), nullable=False),
     sa.Column('content', sa.JSON(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('fx_rates',
@@ -84,7 +84,7 @@ def upgrade() -> None:
     sa.Column('sentiment_score', sa.Numeric(), nullable=True),
     sa.Column('relevance_score', sa.Numeric(), nullable=True),
     sa.Column('is_read', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('strategies',
@@ -97,8 +97,8 @@ def upgrade() -> None:
     sa.Column('tax_optimization_enabled', sa.Boolean(), nullable=False),
     sa.Column('custom_rules', sa.JSON(), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=False),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('holdings',
@@ -119,8 +119,8 @@ def upgrade() -> None:
     sa.Column('unrealized_pnl_pct', sa.Numeric(), nullable=True),
     sa.Column('portfolio_weight_pct', sa.Numeric(), nullable=True),
     sa.Column('last_price_update', sa.DateTime(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -141,7 +141,7 @@ def upgrade() -> None:
     sa.Column('fx_rate', sa.Numeric(), nullable=True),
     sa.Column('fees', sa.Numeric(), nullable=False),
     sa.Column('notes', sa.String(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
     sa.ForeignKeyConstraint(['account_id'], ['accounts.id'], ),
     sa.PrimaryKeyConstraint('id')
     )

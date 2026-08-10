@@ -15,6 +15,7 @@ from app.schemas.transaction import TransactionCreate, TransactionRead
 from app.services import capital_income as cap_income
 from app.services import fx as fx_convert
 from app.services import tax as tax_math
+from app.services.cost_basis import acquisition_unit_cost_eur
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -267,7 +268,16 @@ async def get_realized_gains(
     buy_lots: dict[str, list[tuple[Decimal, Decimal]]] = defaultdict(list)  # symbol -> [(qty, price_eur)]
     for b in buys:
         if b.quantity and b.price_eur:
-            buy_lots[b.symbol].append([b.quantity, b.price_eur])
+            buy_lots[b.symbol].append(
+                [
+                    b.quantity,
+                    acquisition_unit_cost_eur(
+                        b.price_eur,
+                        b.quantity,
+                        b.fees or Decimal("0"),
+                    ),
+                ]
+            )
 
     # Process sells using FIFO
     trades = []
@@ -568,11 +578,21 @@ async def compute_tax_calculation(
     prior_sell_result = await db.execute(prior_sell_stmt)
     prior_sells = list(prior_sell_result.scalars().all())
 
-    # Build FIFO lot queue: [(qty_remaining, price_eur, purchase_date)]
+    # Build FIFO lot queue: [(qty_remaining, fee-inclusive price_eur, purchase_date)]
     lots: list[list] = []
     for b in buys:
         if b.quantity and b.price_eur:
-            lots.append([b.quantity, b.price_eur, b.date])
+            lots.append(
+                [
+                    b.quantity,
+                    acquisition_unit_cost_eur(
+                        b.price_eur,
+                        b.quantity,
+                        b.fees or Decimal("0"),
+                    ),
+                    b.date,
+                ]
+            )
 
     # Consume lots for all prior sells EXCEPT the current one
     # (the current sell is the one matching our parameters)

@@ -23,8 +23,8 @@ def upgrade() -> None:
         sa.Column('id', sa.Uuid(), nullable=False),
         sa.Column('key', sa.String(length=100), nullable=False),
         sa.Column('value', sa.String(length=500), nullable=False),
-        sa.Column('created_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('now()'), nullable=False),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
         sa.PrimaryKeyConstraint('id'),
         sa.UniqueConstraint('key'),
     )

@@ -1,0 +1,20 @@
+{
+  "dataset": "Point-in-time S&P 500 membership intervals",
+  "local_file": "sp500_membership_intervals.csv",
+  "source_repository": "https://github.com/fja05680/sp500",
+  "source_commit": "c31ac3cc56f28cf9a02b4e694eff7ceab596a0ff",
+  "source_file": "sp500_ticker_start_end.csv",
+  "source_url": "https://raw.githubusercontent.com/fja05680/sp500/c31ac3cc56f28cf9a02b4e694eff7ceab596a0ff/sp500_ticker_start_end.csv",
+  "retrieved_at_utc": "2026-08-09T16:43:00Z",
+  "sha256": "39c488ebd6ce6838599e54751adbe8c8e4b68d5801dd77d29b6d137dd77388ac",
+  "license": "MIT",
+  "license_file": "SP500_MEMBERSHIP_LICENSE.txt",
+  "coverage_start": "1996-01-02",
+  "default_backtest_start": "2003-01-01",
+  "known_limitations": [
+    "The upstream maintainer reports that the 1996-2001 rows can contain fewer than the expected number of constituents.",
+    "The source is a community-maintained reconstruction rather than an official S&P Dow Jones Indices constituent feed.",
+    "Membership intervals do not provide historical sectors, corporate-action mappings, or security prices.",
+    "A separate delisted-security price source is required; membership alone cannot remove deletion-return bias."
+  ]
+}

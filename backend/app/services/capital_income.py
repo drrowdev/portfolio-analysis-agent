@@ -26,6 +26,7 @@ from datetime import date
 from decimal import Decimal
 
 from app.services import tax as tax_math
+from app.services.cost_basis import acquisition_unit_cost_eur
 
 DEFERRED = "deferred"  # OST tax treatment: taxed only on withdrawal
 LISTED_DIVIDEND_TAXABLE_FRACTION = Decimal("0.85")  # TVL 33a §: 15% tax-free
@@ -121,7 +122,17 @@ def _taxable_gains_for_year(
         for r in rows:
             if r.txn_type in BUY_TYPES:
                 if r.quantity and r.quantity > 0:
-                    lots.append([r.quantity, r.price_eur, r.date])
+                    lots.append(
+                        [
+                            r.quantity,
+                            acquisition_unit_cost_eur(
+                                r.price_eur,
+                                r.quantity,
+                                r.fees or Decimal("0"),
+                            ),
+                            r.date,
+                        ]
+                    )
                 continue
 
             # A sell: consume lots FIFO and (if in-year, non-OST) score the gain.

@@ -1,0 +1,107 @@
+{
+  "spec_version": "alpha-momentum-trend-v1",
+  "registered_at_utc": "2026-08-09T16:37:48Z",
+  "status": "locked",
+  "objective": "Test whether one deterministic, price-only strategy adds after-cost and after-tax return over the S&P 500 Total Return index in EUR without exceeding the configured risk budget.",
+  "hypothesis": "A small active sleeve allocated to point-in-time S&P 500 constituents with positive 12-minus-1-month benchmark-relative momentum and a positive 200-trading-day trend will produce positive net active return.",
+  "benchmark": {
+    "name": "S&P 500 Total Return",
+    "ticker": "^SP500TR",
+    "currency": "EUR",
+    "cash_return_pct": 0.0
+  },
+  "signal": {
+    "price_field": "adjusted_close",
+    "momentum_lookback_trading_days": 252,
+    "momentum_skip_recent_trading_days": 21,
+    "trend_sma_trading_days": 200,
+    "require_positive_absolute_momentum": true,
+    "require_positive_benchmark_relative_momentum": true,
+    "require_price_above_trend_sma": true,
+    "tie_breaker": "ticker_ascending"
+  },
+  "execution": {
+    "rebalance_frequency": "monthly",
+    "signal_time": "last common market close of each calendar month",
+    "fill_time": "next common market close after the signal",
+    "maximum_price_age_calendar_days": 4,
+    "allow_fractional_shares": true,
+    "one_way_transaction_cost_source": "proof_of_value.estimated_transaction_cost_bps",
+    "market_impact_beyond_configured_cost_bps": "excluded"
+  },
+  "universe_track": {
+    "membership": "point-in-time S&P 500 membership on the signal date",
+    "active_sleeve_pct": 20.0,
+    "benchmark_core_pct": 80.0,
+    "maximum_selected_names": 50,
+    "selected_name_weighting": "equal",
+    "unallocated_active_sleeve": "benchmark",
+    "removed_constituent_handling": "move its weight to the benchmark at the first available close after removal",
+    "minimum_constituent_coverage_pct": 100.0
+  },
+  "personal_portfolio_track": {
+    "source": "transactions available on or before each historical decision date",
+    "baseline": "actual reconstructed holdings with position-changing cash flows neutralized at the close",
+    "active_overlay_pct": 20.0,
+    "preserved_actual_exposure_pct": 80.0,
+    "passing_signal_exposure": "actual security",
+    "failing_or_unavailable_signal_exposure": "benchmark",
+    "future_transactions_visible": false,
+    "synthetic_opening_balances_allowed": false,
+    "current_holdings_reconciliation_required": true
+  },
+  "tax_scenarios": {
+    "deferred": "No immediate capital-gains tax.",
+    "standard": "FIFO lots, acquisition fees in basis, per-lot Finnish 20/40 percent deemed-cost comparison, and annual 30/34 percent capital-income brackets.",
+    "espp": "Unsupported without employment-income and qualifying-disposition fields; affected scope fails closed."
+  },
+  "periods": {
+    "warmup": {
+      "start": "2001-01-16",
+      "end": "2002-12-31"
+    },
+    "development": {
+      "start": "2003-01-01",
+      "end": "2012-12-31"
+    },
+    "validation": {
+      "start": "2013-01-01",
+      "end": "2019-12-31"
+    },
+    "holdout": {
+      "start": "2020-01-01",
+      "end": "2026-06-30",
+      "sealed_before_first_run": true
+    }
+  },
+  "statistics": {
+    "return_frequency": "daily",
+    "confidence_interval_series": "monthly net active returns",
+    "bootstrap_method": "moving-block",
+    "bootstrap_samples": 5000,
+    "bootstrap_block_months": 6,
+    "bootstrap_seed": 20260809,
+    "confidence_level_pct": 95.0,
+    "minimum_holdout_months": 60,
+    "multiple_testing_budget": 1
+  },
+  "promotion_gate": {
+    "holdout_net_active_cagr_above_policy_minimum": true,
+    "holdout_bootstrap_active_return_lower_bound_above_zero": true,
+    "minimum_information_ratio": 0.25,
+    "respect_max_drawdown": true,
+    "respect_max_annualized_volatility": true,
+    "respect_max_tracking_error": true,
+    "respect_max_annual_turnover": true,
+    "respect_max_single_position": true,
+    "point_in_time_sector_history_required": true,
+    "no_data_exclusions_or_synthetic_balances": true,
+    "forward_shadow_confirmation_required": true
+  },
+  "anti_overfitting": {
+    "parameter_search_allowed": false,
+    "holdout_reuse_for_revision_allowed": false,
+    "revision_rule": "Any signal, portfolio-construction, cost, tax, split, or threshold change requires a new version and a new future holdout.",
+    "historical_evidence_is_proof_of_future_alpha": false
+  }
+}

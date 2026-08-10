@@ -1,5 +1,6 @@
 import enum
 import uuid
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
@@ -34,6 +35,9 @@ class Account(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3))  # EUR | USD
     tax_treatment: Mapped[TaxTreatment] = mapped_column(Enum(TaxTreatment))
     ost_lifetime_deposits: Mapped[Optional[Decimal]] = mapped_column(default=None)
+    last_holdings_snapshot_date: Mapped[Optional[date]] = mapped_column(
+        default=None
+    )
 
     holdings: Mapped[list["Holding"]] = relationship(back_populates="account")  # noqa: F821
     transactions: Mapped[list["Transaction"]] = relationship(back_populates="account")  # noqa: F821

@@ -11,7 +11,7 @@ from app.routers.gate import router as gate_router, is_authenticated
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Startup — create tables for local SQLite dev
+    # Startup after Alembic: apply legacy guards, warm metadata, start schedules.
     from app.database import engine, init_db
     from app.services import symbol_metadata as symbol_metadata_cache
     from app.services.scheduler import setup_scheduler, shutdown_scheduler

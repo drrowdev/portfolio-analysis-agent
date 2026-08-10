@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { useAnalysisHistory, useTriggerAnalysis } from '@/hooks/useAnalysis';
+import {
+  useAnalysisHistory,
+  useGuidance,
+  useRefreshGuidance,
+  useTriggerAnalysis,
+} from '@/hooks/useAnalysis';
 import type { AnalysisContent, AnalysisHistoryItem } from '@/hooks/useAnalysis';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -12,17 +17,31 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Gauge,
+  RefreshCw,
   Sparkles,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ProofOfValueCard } from '@/components/analysis/ProofOfValueCard';
+import { ConsumerGuidance } from '@/components/analysis/ConsumerGuidance';
+import { toast } from '@/hooks/useToast';
 
 const ANALYSIS_TYPES = [
   {
+    key: 'daily-summary',
+    label: 'Market Research',
+    icon: Newspaper,
+    emoji: '🗞️',
+    description: 'Summarize current portfolio news with sources',
+    historyType: 'daily_summary',
+  },
+  {
     key: 'rebalance',
-    label: 'Rebalance',
+    label: 'Risk Review',
     icon: Scale,
     emoji: '⚖️',
-    description: 'Check if your portfolio needs rebalancing based on your strategy',
+    description: 'Audit concentration and risk limits without generating a trade',
     historyType: 'rebalance',
   },
   {
@@ -30,7 +49,7 @@ const ANALYSIS_TYPES = [
     label: 'Tax Optimization',
     icon: Landmark,
     emoji: '🏛️',
-    description: 'Find tax-saving opportunities across AOT, OST, and ESPP accounts',
+    description: 'Review tax-data readiness and bracket facts without sale advice',
     historyType: 'tax_optimization',
   },
   {
@@ -45,7 +64,7 @@ const ANALYSIS_TYPES = [
 
 const TYPE_LABELS: Record<string, string> = {
   daily_summary: 'Daily Summary',
-  rebalance: 'Rebalance',
+  rebalance: 'Risk Review',
   tax_optimization: 'Tax Optimization',
   news_impact: 'News Impact',
 };
@@ -86,20 +105,48 @@ function priorityBadgeVariant(priority: string): 'destructive' | 'warning' | 'su
 
 export function AnalysisPage() {
   const { data: history = [], isLoading: historyLoading } = useAnalysisHistory();
+  const guidanceQuery = useGuidance();
+  const refreshGuidance = useRefreshGuidance();
   const trigger = useTriggerAnalysis();
   const [runningType, setRunningType] = useState<string | null>(null);
-  const [latestResult, setLatestResult] = useState<Record<string, AnalysisContent>>({});
+  const [latestResult, setLatestResult] = useState<
+    Record<string, { content: AnalysisContent; created_at: string }>
+  >({});
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
 
   const handleRunAnalysis = async (typeKey: string) => {
     setRunningType(typeKey);
     try {
       const result = await trigger.mutateAsync(typeKey);
-      setLatestResult((prev) => ({ ...prev, [typeKey]: result }));
-    } catch {
-      // Error handled by React Query
+      setLatestResult((previous) => ({
+        ...previous,
+        [typeKey]: { content: result, created_at: new Date().toISOString() },
+      }));
+    } catch (error) {
+      toast({
+        title: 'Optional analysis failed',
+        description: error instanceof Error ? error.message : 'The analysis could not be completed.',
+        variant: 'destructive',
+      });
     } finally {
       setRunningType(null);
+    }
+  };
+
+  const handleRefreshGuidance = async () => {
+    try {
+      const result = await refreshGuidance.mutateAsync();
+      const blocked = result.steps.find((step) => step.status === 'blocked');
+      toast({
+        title: blocked ? 'Portfolio refreshed with blockers' : 'Portfolio refreshed',
+        description: blocked?.detail ?? 'Prices and portfolio checks are current.',
+      });
+    } catch (error) {
+      toast({
+        title: 'Portfolio refresh failed',
+        description: error instanceof Error ? error.message : 'The refresh could not be completed.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -122,100 +169,225 @@ export function AnalysisPage() {
   // Override with freshly-triggered results
   for (const at of ANALYSIS_TYPES) {
     if (latestResult[at.key]) {
-      latestByType[at.historyType] = { content: latestResult[at.key], created_at: new Date().toISOString() };
+      latestByType[at.historyType] = latestResult[at.key];
     }
   }
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-6 w-6 text-emerald-500" />
-          <h2 className="text-2xl font-bold text-foreground">AI Analysis</h2>
-        </div>
-        <p className="text-sm text-muted-foreground mt-1">Claude-powered portfolio insights</p>
-      </div>
-
-      {/* Action Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {ANALYSIS_TYPES.map((at) => {
-          const isRunning = runningType === at.key;
-          return (
-            <Card key={at.key} className="flex flex-col">
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">{at.emoji}</span>
-                  <CardTitle className="text-sm font-semibold">{at.label}</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="flex flex-col flex-1">
-                <p className="text-xs text-muted-foreground flex-1 mb-4">{at.description}</p>
-                <Button
-                  size="sm"
-                  className="w-full bg-emerald-600 hover:bg-emerald-700"
-                  onClick={() => handleRunAnalysis(at.key)}
-                  disabled={isRunning}
-                >
-                  {isRunning ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                      Analyzing…
-                    </>
-                  ) : (
-                    'Run Analysis'
-                  )}
-                </Button>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      {/* Latest Results */}
-      {Object.keys(latestByType).length > 0 && (
-        <div className="space-y-6">
-          <h3 className="text-lg font-semibold text-foreground">Latest Results</h3>
-          {ANALYSIS_TYPES.map((at) => {
-            const entry = latestByType[at.historyType];
-            if (!entry) return null;
-            return (
-              <AnalysisResultCard
-                key={at.key}
-                label={at.label}
-                emoji={at.emoji}
-                content={entry.content}
-                createdAt={entry.created_at}
-              />
-            );
-          })}
-        </div>
-      )}
-
-      {/* History */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold text-foreground">History</h3>
-        {historyLoading ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading history…
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Gauge className="h-6 w-6 text-emerald-500" />
+            <h2 className="text-2xl font-bold text-foreground">Portfolio Cockpit</h2>
           </div>
-        ) : history.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No analysis history yet. Run your first analysis above!</p>
-        ) : (
-          <div className="space-y-2">
-            {history.map((item) => (
-              <HistoryItem
-                key={item.id}
-                item={item}
-                expanded={expandedHistory.has(item.id)}
-                onToggle={() => toggleHistory(item.id)}
-              />
-            ))}
-          </div>
-        )}
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Portfolio risk, benchmark performance, and tracked tax and cost facts.
+          </p>
+        </div>
+        <div className="flex min-w-56 flex-col gap-2 sm:items-end">
+          <Button
+            onClick={handleRefreshGuidance}
+            disabled={runningType !== null || refreshGuidance.isPending}
+            className="bg-emerald-600 hover:bg-emerald-700"
+          >
+            <RefreshCw
+              className={cn('mr-2 h-4 w-4', refreshGuidance.isPending && 'animate-spin')}
+            />
+            {refreshGuidance.isPending ? 'Refreshing portfolio...' : 'Refresh portfolio'}
+          </Button>
+          {refreshGuidance.data && (
+            <p role="status" aria-live="polite" className="max-w-sm text-xs text-muted-foreground sm:text-right">
+              Checked {formatTimestamp(refreshGuidance.data.guidance.as_of)} ·{' '}
+              {refreshGuidance.data.steps[0]?.detail}
+            </p>
+          )}
+        </div>
       </div>
+
+      <ConsumerGuidance
+        guidance={guidanceQuery.data}
+        loading={guidanceQuery.isLoading}
+        error={guidanceQuery.error}
+      />
+
+      <NewsResearchCard
+        entry={latestByType.daily_summary}
+        isRunning={runningType === 'daily-summary'}
+        disabled={runningType !== null || refreshGuidance.isPending}
+        onRun={() => handleRunAnalysis('daily-summary')}
+      />
+
+      <details className="group rounded-lg border border-border bg-card">
+        <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-4 hover:bg-accent/20">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">Advanced evidence and tools</p>
+            <p className="text-xs text-muted-foreground">
+              Optional model output, backtests, assumptions, and history
+            </p>
+          </div>
+          <Badge variant="outline">Optional</Badge>
+          <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-90" />
+        </summary>
+
+        <div className="space-y-6 border-t border-border p-4">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Run an optional specialist analysis</h3>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {ANALYSIS_TYPES.map((analysisType) => {
+                const Icon = analysisType.icon;
+                const isRunning = runningType === analysisType.key;
+                return (
+                  <Card key={analysisType.key} className="flex flex-col">
+                    <CardContent className="flex flex-1 flex-col p-4">
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-4 w-4 text-emerald-500" />
+                        <p className="text-sm font-medium">{analysisType.label}</p>
+                      </div>
+                      <p className="mb-3 mt-2 flex-1 text-xs text-muted-foreground">
+                        {analysisType.description}
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRunAnalysis(analysisType.key)}
+                        disabled={runningType !== null || refreshGuidance.isPending}
+                      >
+                        {isRunning && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                        Run check
+                      </Button>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+
+          {Object.keys(latestByType).length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-foreground">Full latest analyses</h3>
+              {ANALYSIS_TYPES.map((analysisType) => {
+                const entry = latestByType[analysisType.historyType];
+                if (!entry) return null;
+                return (
+                  <AnalysisResultCard
+                    key={analysisType.key}
+                    label={analysisType.label}
+                    emoji={analysisType.emoji}
+                    content={entry.content}
+                    createdAt={entry.created_at}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          <ProofOfValueCard />
+
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">Analysis history</h3>
+            {historyLoading ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading history…
+              </div>
+            ) : history.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No analysis history yet.</p>
+            ) : (
+              <div className="space-y-2">
+                {history.map((item) => (
+                  <HistoryItem
+                    key={item.id}
+                    item={item}
+                    expanded={expandedHistory.has(item.id)}
+                    onToggle={() => toggleHistory(item.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </details>
     </div>
+  );
+}
+
+function NewsResearchCard({
+  entry,
+  isRunning,
+  disabled,
+  onRun,
+}: {
+  entry?: { content: AnalysisContent; created_at: string };
+  isRunning: boolean;
+  disabled: boolean;
+  onRun: () => void;
+}) {
+  const unavailable = entry?.content.summary.startsWith('Analysis unavailable');
+
+  return (
+    <Card className="border-violet-500/20">
+      <CardHeader className="pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-violet-500" />
+              <CardTitle className="text-base">News research</CardTitle>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Summarize recent portfolio news with sources.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={onRun} disabled={disabled}>
+            {isRunning && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            {isRunning ? 'Analyzing news...' : 'Analyze news'}
+          </Button>
+        </div>
+      </CardHeader>
+      {entry && (
+        <CardContent className="space-y-3">
+          <div
+            className={cn(
+              'rounded-md border p-3 text-sm',
+              unavailable
+                ? 'border-amber-500/30 bg-amber-500/5 text-muted-foreground'
+                : 'border-border bg-accent/30 text-foreground',
+            )}
+          >
+            {entry.content.summary}
+          </div>
+          {entry.content.insights.length > 0 && (
+            <div className="grid gap-2 md:grid-cols-2">
+              {entry.content.insights.slice(0, 4).map((insight) => (
+                <div key={`${insight.title}-${insight.detail}`} className="rounded-md border border-border p-3">
+                  <p className="text-sm font-medium text-foreground">{insight.title}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{insight.detail}</p>
+                  {(insight.sources?.length ?? 0) > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {insight.sources!.map((source) => (
+                        <a
+                          key={`${source.url}-${source.date}`}
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] text-emerald-500 hover:underline"
+                        >
+                          {source.name} · {source.date}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Updated {formatTimestamp(entry.created_at)}
+          </p>
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
@@ -254,6 +426,16 @@ function AnalysisResultCard({
 function AnalysisContentRenderer({ content }: { content: AnalysisContent }) {
   return (
     <>
+      {content.meta?.mode === 'shadow' && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Badge variant="secondary">Shadow mode</Badge>
+          <span>Prompt {content.meta.prompt_version}</span>
+          {!content.meta.can_recommend_trades && (
+            <Badge variant="warning">Trade decisions blocked</Badge>
+          )}
+        </div>
+      )}
+
       {/* Summary */}
       {content.summary && (
         <p className="text-sm text-foreground bg-accent/50 rounded-md p-3">{content.summary}</p>
@@ -267,6 +449,21 @@ function AnalysisContentRenderer({ content }: { content: AnalysisContent }) {
             <div key={i} className={cn('border-l-4 rounded-md p-3 bg-accent/30', severityColor(insight.severity))}>
               <p className="text-sm font-medium text-foreground">{insight.title}</p>
               <p className="text-xs text-muted-foreground mt-1">{insight.detail}</p>
+              {(insight.sources?.length ?? 0) > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {insight.sources!.map((source) => (
+                    <a
+                      key={`${source.url}-${source.date}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] text-emerald-500 hover:underline"
+                    >
+                      {source.name} · {source.date}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -275,7 +472,7 @@ function AnalysisContentRenderer({ content }: { content: AnalysisContent }) {
       {/* Recommendations */}
       {content.recommendations?.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-sm font-medium text-foreground">Recommendations</h4>
+          <h4 className="text-sm font-medium text-foreground">Shadow decisions</h4>
           {content.recommendations.map((rec, i) => (
             <div key={i} className="flex items-start gap-3 rounded-md border border-border p-3">
               <div className="flex-1 min-w-0 space-y-1">
@@ -289,8 +486,40 @@ function AnalysisContentRenderer({ content }: { content: AnalysisContent }) {
                       {rec.account_type}
                     </Badge>
                   )}
+                  {rec.decision && (
+                    <Badge variant="secondary" className="text-[10px] px-1.5">
+                      {rec.decision}
+                    </Badge>
+                  )}
+                  {rec.candidate_objective === 'risk_enforcement' && (
+                    <Badge variant="outline" className="text-[10px] px-1.5">
+                      risk-limit review
+                    </Badge>
+                  )}
+                  {rec.confidence && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {rec.confidence} confidence
+                      {rec.urgency && rec.urgency !== 'none' ? ` · ${rec.urgency}` : ''}
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">{rec.rationale}</p>
+                {rec.candidate_objective === 'risk_enforcement' && (
+                  <div className="space-y-1 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+                    <p>
+                      Shadow amount €{Number(rec.amount_eur ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {' · '}quantity {Number(rec.quantity ?? 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                      {' · '}reference €{Number(rec.reference_price_eur ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </p>
+                    <p>
+                      Estimated cost €{Number(rec.estimated_transaction_cost_eur ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {' · '}estimated tax €{Number(rec.estimated_tax_impact_eur ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                      {rec.valid_until ? ` · expires ${new Date(rec.valid_until).toLocaleDateString()}` : ''}
+                    </p>
+                    {rec.risk_impact && <p>{rec.risk_impact}</p>}
+                    <p>No return, downside, or alpha forecast is attached to this risk-only candidate.</p>
+                  </div>
+                )}
               </div>
             </div>
           ))}
