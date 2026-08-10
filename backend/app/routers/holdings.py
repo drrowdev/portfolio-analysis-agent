@@ -14,6 +14,7 @@ from app.models.holding import Holding
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.holding import HoldingRead
 from app.services.market_data import update_holdings_prices
+from app.services.cost_basis import acquisition_unit_cost_eur
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,9 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
         if holding:
             old_cost = holding.total_cost_eur
             old_qty = holding.total_quantity
-            new_cost = trade.quantity * trade.price_per_share_eur
+            new_cost = (
+                trade.quantity * trade.price_per_share_eur + trade.fees
+            )
             holding.total_quantity = old_qty + trade.quantity
             holding.total_cost_eur = old_cost + new_cost
             holding.avg_cost_basis_eur = holding.total_cost_eur / holding.total_quantity
@@ -110,14 +113,32 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
                 holding.total_cost_native is not None
                 and (holding.currency or "").upper() == (trade.currency or "").upper()
             ):
-                holding.total_cost_native = holding.total_cost_native + (trade.quantity * price_native)
+                fee_native = (
+                    trade.fees
+                    if trade.currency.upper() == "EUR"
+                    else trade.fees * trade.fx_rate
+                    if trade.fx_rate
+                    else Decimal("0")
+                )
+                holding.total_cost_native = (
+                    holding.total_cost_native
+                    + trade.quantity * price_native
+                    + fee_native
+                )
                 holding.avg_cost_basis_native = holding.total_cost_native / holding.total_quantity
             else:
                 holding.total_cost_native = None
                 holding.avg_cost_basis_native = None
         else:
-            total_cost = trade.quantity * trade.price_per_share_eur
-            total_cost_native = trade.quantity * price_native
+            total_cost = trade.quantity * trade.price_per_share_eur + trade.fees
+            fee_native = (
+                trade.fees
+                if trade.currency.upper() == "EUR"
+                else trade.fees * trade.fx_rate
+                if trade.fx_rate
+                else Decimal("0")
+            )
+            total_cost_native = trade.quantity * price_native + fee_native
             holding = Holding(
                 account_id=trade.account_id,
                 symbol=trade.symbol,
@@ -127,9 +148,9 @@ async def quick_trade(trade: QuickTradeRequest, db: AsyncSession = Depends(get_d
                 exchange=trade.exchange,
                 total_quantity=trade.quantity,
                 snapshot_date=trade.trade_date or date.today(),
-                avg_cost_basis_eur=trade.price_per_share_eur,
+                avg_cost_basis_eur=total_cost / trade.quantity,
                 total_cost_eur=total_cost,
-                avg_cost_basis_native=price_native,
+                avg_cost_basis_native=total_cost_native / trade.quantity,
                 total_cost_native=total_cost_native,
             )
             db.add(holding)
@@ -254,10 +275,20 @@ def _fifo_replay(transactions: list, buy_types: list, sell_types: list):
             currencies.add(ccy)
 
         if tx.transaction_type in buy_types:
-            price_eur = tx.price_eur or (
+            raw_price_eur = tx.price_eur or (
                 (tx.total_eur / qty) if tx.total_eur and qty else Decimal("0")
             )
-            price_native = tx.price_native or price_eur
+            price_eur = acquisition_unit_cost_eur(
+                raw_price_eur,
+                qty,
+                tx.fees or Decimal("0"),
+            )
+            price_native = tx.price_native or raw_price_eur
+            if tx.fees:
+                if ccy == "EUR":
+                    price_native += tx.fees / qty
+                elif tx.fx_rate:
+                    price_native += tx.fees * tx.fx_rate / qty
             lots.append([qty, price_eur, price_native, ccy])
         elif tx.transaction_type in sell_types:
             remaining = qty

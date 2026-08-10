@@ -79,12 +79,10 @@ def news_keywords(symbol: str) -> list[str]:
 def sector_info(symbol: str) -> Optional[dict[str, str]]:
     """Return {sector, industry, country} for a symbol if available."""
     md = _cache.get(symbol)
-    if not md:
-        return None
-    if not (md.sector or md.industry or md.country):
+    if not md or not md.sector:
         return None
     return {
-        "sector": md.sector or "Other",
+        "sector": md.sector,
         "industry": md.industry or "Unknown",
         "country": md.country or "Unknown",
     }

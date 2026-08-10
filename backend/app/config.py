@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     FINNHUB_API_KEY: str = ""
     NTFY_TOPIC: str = "portfolio-alerts"
     APP_SECRET: str = ""  # Password for cookie-based access gate
+    BACKTEST_MARKET_DATA_PATH: str = ""
 
     @property
     def is_sqlite(self) -> bool:

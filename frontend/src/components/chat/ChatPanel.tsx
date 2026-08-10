@@ -198,7 +198,7 @@ export function ChatPanel() {
         <div className="flex items-center gap-2">
           <MessageCircle className="h-5 w-5 text-primary" />
           <span className="font-semibold text-card-foreground">Portfolio AI</span>
-          <span className="text-xs text-muted-foreground">Sonnet 4.6</span>
+          <span className="text-xs text-muted-foreground">Sonnet 5 · Shadow</span>
         </div>
         <div className="flex items-center gap-1">
           <button

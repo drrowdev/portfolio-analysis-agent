@@ -72,6 +72,19 @@ def test_simple_gain_and_dividend():
     assert s.dividend_payment_count == 1
 
 
+def test_buy_commission_increases_fifo_acquisition_basis():
+    buy = _buy("acc1", "MSFT", date(2024, 1, 10), 1, 100)
+    buy.fees = Decimal("10")
+    txns = [
+        buy,
+        _sell("acc1", "MSFT", date(YEAR, 3, 1), 1, 110),
+    ]
+
+    summary = compute_capital_income(txns, YEAR)
+
+    assert summary.taxable_gains_eur == Decimal("0")
+
+
 def test_ost_gains_and_dividends_excluded():
     txns = [
         _buy("ost", "NOKIA", date(2024, 1, 1), 100, 4, treatment="deferred"),

@@ -29,14 +29,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables and add any missing columns."""
-    from app.models import Base  # noqa: F811
-    from sqlalchemy import text
+    """Apply legacy additive column guards after Alembic has initialized the schema."""
+    from sqlalchemy import inspect, text
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-        # Lightweight migrations — add columns that create_all won't add to existing tables
+        # Legacy additive guards remain for columns introduced before every schema
+        # change was represented in Alembic.
         migrations = [
             ("holdings", "price_change_pct", "NUMERIC"),
             ("holdings", "market_state", "VARCHAR(20)"),
@@ -50,13 +48,24 @@ async def init_db() -> None:
             ("tax_calculations", "paid_date", "DATE"),
         ]
         for table, column, col_type in migrations:
-            await conn.execute(text(
-                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
-            ))
+            existing_columns = await conn.run_sync(
+                lambda sync_conn, table_name=table: {
+                    item["name"]
+                    for item in inspect(sync_conn).get_columns(table_name)
+                }
+            )
+            if column not in existing_columns:
+                await conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                )
 
         # Add new enum values for crypto support
-        for enum_val in ["crypto"]:
-            for enum_type in ["accounttype", "taxtreatment"]:
-                await conn.execute(text(
-                    f"ALTER TYPE {enum_type} ADD VALUE IF NOT EXISTS '{enum_val}'"
-                ))
+        if not settings.is_sqlite:
+            for enum_val in ["crypto"]:
+                for enum_type in ["accounttype", "taxtreatment"]:
+                    await conn.execute(
+                        text(
+                            f"ALTER TYPE {enum_type} "
+                            f"ADD VALUE IF NOT EXISTS '{enum_val}'"
+                        )
+                    )

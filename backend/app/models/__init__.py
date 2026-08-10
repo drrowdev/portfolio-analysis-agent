@@ -10,6 +10,8 @@ from app.models.user_settings import UserSetting
 from app.models.cache import CacheEntry
 from app.models.tax_calculation import TaxCalculation
 from app.models.symbol_metadata import SymbolMetadata
+from app.models.analysis import AnalysisRun, ShadowRecommendation, RecommendationOutcome
+from app.models.backtest import BacktestRun
 from app.models.base import Base
 
 __all__ = [
@@ -28,4 +30,8 @@ __all__ = [
     "CacheEntry",
     "TaxCalculation",
     "SymbolMetadata",
+    "AnalysisRun",
+    "BacktestRun",
+    "ShadowRecommendation",
+    "RecommendationOutcome",
 ]

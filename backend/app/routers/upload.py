@@ -28,6 +28,39 @@ ACCOUNT_NAME_MAP = {
     AccountType.osakesaastotili: "Nordnet OST",
 }
 
+FIDELITY_TRANSACTION_TYPES = {
+    "espp_purchase": TransactionType.espp_purchase,
+    "dividend": TransactionType.dividend,
+    "reinvestment": TransactionType.buy,
+    "tax_withheld": TransactionType.withdrawal,
+}
+
+
+def _is_nordnet_lot_import(transaction: Transaction) -> bool:
+    return bool(
+        transaction.notes
+        and transaction.notes.startswith("Imported from Nordnet lot export")
+    )
+
+
+def _fidelity_transaction_key(
+    *,
+    symbol: str,
+    transaction_type: TransactionType,
+    transaction_date,
+    quantity: Decimal,
+    price_native: Decimal,
+    total_native: Decimal,
+) -> tuple:
+    return (
+        symbol,
+        transaction_type.value,
+        transaction_date,
+        quantity.normalize(),
+        price_native.normalize(),
+        total_native.normalize(),
+    )
+
 
 @router.post("/nordnet")
 async def upload_nordnet_csv(
@@ -57,17 +90,43 @@ async def upload_nordnet_csv(
 
     if existing:
         account = existing
-        # Delete old holdings and transactions for re-import
-        old_holdings = (
-            await db.execute(select(Holding).where(Holding.account_id == account.id))
-        ).scalars().all()
-        for h in old_holdings:
-            await db.delete(h)
         old_txns = (
             await db.execute(
                 select(Transaction).where(Transaction.account_id == account.id)
             )
         ).scalars().all()
+        if any(not _is_nordnet_lot_import(transaction) for transaction in old_txns):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This account contains transaction history beyond a prior open-lot "
+                    "snapshot. Re-importing an open-lot export would erase that history, "
+                    "so the existing ledger was left unchanged."
+                ),
+            )
+
+        # A new open-lot snapshot may replace only an earlier open-lot snapshot.
+        old_holdings = (
+            await db.execute(select(Holding).where(Holding.account_id == account.id))
+        ).scalars().all()
+        latest_snapshot = account.last_holdings_snapshot_date or max(
+            (
+                holding.snapshot_date
+                for holding in old_holdings
+                if holding.snapshot_date is not None
+            ),
+            default=None,
+        )
+        if latest_snapshot is not None and result.report_date < latest_snapshot:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This Nordnet snapshot is older than the latest imported "
+                    "holdings snapshot, so the existing holdings were left unchanged."
+                ),
+            )
+        for h in old_holdings:
+            await db.delete(h)
         for t in old_txns:
             await db.delete(t)
         await db.flush()
@@ -80,9 +139,11 @@ async def upload_nordnet_csv(
             external_id=result.portfolio_id,
             currency="EUR",
             tax_treatment=TAX_TREATMENT_MAP[acct_type],
+            last_holdings_snapshot_date=result.report_date,
         )
         db.add(account)
         await db.flush()
+    account.last_holdings_snapshot_date = result.report_date
 
     # Create transactions from lots
     for lot in result.lots:
@@ -174,22 +235,47 @@ async def upload_fidelity_pdf(
         Account.account_type == AccountType.espp,
     )
     existing = (await db.execute(stmt)).scalar_one_or_none()
+    preserved_transactions: list[Transaction] = []
+    replace_holdings = True
 
     if existing:
         account = existing
-        # Delete old holdings and transactions for re-import
         old_holdings = (
             await db.execute(select(Holding).where(Holding.account_id == account.id))
         ).scalars().all()
-        for h in old_holdings:
-            await db.delete(h)
         old_txns = (
             await db.execute(
                 select(Transaction).where(Transaction.account_id == account.id)
             )
         ).scalars().all()
-        for t in old_txns:
-            await db.delete(t)
+        latest_snapshot = account.last_holdings_snapshot_date or max(
+            (
+                holding.snapshot_date
+                for holding in old_holdings
+                if holding.snapshot_date is not None
+            ),
+            default=None,
+        )
+        if account.last_holdings_snapshot_date is None:
+            account.last_holdings_snapshot_date = latest_snapshot
+        replace_holdings = (
+            latest_snapshot is None or result.period_end >= latest_snapshot
+        )
+        if replace_holdings:
+            for holding in old_holdings:
+                await db.delete(holding)
+            account.last_holdings_snapshot_date = result.period_end
+
+        period_marker = f"({result.period_start} - {result.period_end})"
+        for transaction in old_txns:
+            if (
+                transaction.notes
+                and transaction.notes.startswith("Fidelity ")
+                and transaction.notes.endswith(period_marker)
+            ):
+                await db.delete(transaction)
+            else:
+                preserved_transactions.append(transaction)
         await db.flush()
     else:
         account = Account(
@@ -200,13 +286,14 @@ async def upload_fidelity_pdf(
             external_id=external_id,
             currency="USD",
             tax_treatment=TaxTreatment.espp,
+            last_holdings_snapshot_date=result.period_end,
         )
         db.add(account)
         await db.flush()
 
-    # Create holdings
+    # Replace holdings only with an equally recent or newer statement snapshot.
     holdings_created = 0
-    for fh in result.holdings:
+    for fh in result.holdings if replace_holdings else []:
         holding = Holding(
             id=uuid.uuid4(),
             account_id=account.id,
@@ -225,16 +312,40 @@ async def upload_fidelity_pdf(
         db.add(holding)
         holdings_created += 1
 
-    # Create transactions
+    # Merge statement activity, replacing only the same statement period and
+    # de-duplicating overlapping periods by native transaction identity.
     transactions_imported = 0
+    duplicates_skipped = 0
+    existing_keys = {
+        _fidelity_transaction_key(
+            symbol=transaction.symbol,
+            transaction_type=transaction.transaction_type,
+            transaction_date=transaction.date,
+            quantity=transaction.quantity or Decimal("0"),
+            price_native=transaction.price_native or Decimal("0"),
+            total_native=transaction.total_native or Decimal("0"),
+        )
+        for transaction in preserved_transactions
+    }
     for ft in result.transactions:
-        tx_type_map = {
-            "espp_purchase": TransactionType.espp_purchase,
-            "dividend": TransactionType.dividend,
-            "reinvestment": TransactionType.buy,
-            "tax_withheld": TransactionType.withdrawal,
-        }
-        tx_type = tx_type_map.get(ft.transaction_type, TransactionType.buy)
+        tx_type = FIDELITY_TRANSACTION_TYPES.get(
+            ft.transaction_type,
+            TransactionType.buy,
+        )
+        quantity = ft.quantity or Decimal("0")
+        price_native = ft.price_usd or Decimal("0")
+        total_native = ft.amount_usd or quantity * price_native
+        transaction_key = _fidelity_transaction_key(
+            symbol=ft.symbol,
+            transaction_type=tx_type,
+            transaction_date=ft.date,
+            quantity=quantity,
+            price_native=price_native,
+            total_native=total_native,
+        )
+        if transaction_key in existing_keys:
+            duplicates_skipped += 1
+            continue
 
         tx = Transaction(
             id=uuid.uuid4(),
@@ -245,19 +356,16 @@ async def upload_fidelity_pdf(
             currency="USD",
             transaction_type=tx_type,
             date=ft.date,
-            quantity=ft.quantity or Decimal("0"),
-            price_native=ft.price_usd or Decimal("0"),
-            price_eur=ft.price_usd or Decimal("0"),  # USD until FX conversion
-            total_native=ft.amount_usd or (
-                (ft.quantity or Decimal("0")) * (ft.price_usd or Decimal("0"))
-            ),
-            total_eur=ft.amount_usd or (
-                (ft.quantity or Decimal("0")) * (ft.price_usd or Decimal("0"))
-            ),
+            quantity=quantity,
+            price_native=price_native,
+            price_eur=price_native,  # USD until FX conversion
+            total_native=total_native,
+            total_eur=total_native,
             fees=Decimal("0"),
             notes=f"Fidelity {ft.transaction_type} ({result.period_start} - {result.period_end})",
         )
         db.add(tx)
+        existing_keys.add(transaction_key)
         transactions_imported += 1
 
     await db.flush()
@@ -282,6 +390,7 @@ async def upload_fidelity_pdf(
         "account_id": str(account.id),
         "holdings_created": holdings_created,
         "transactions_imported": transactions_imported,
+        "duplicate_transactions_skipped": duplicates_skipped,
         "fx_conversion": fx_conversion,
         "summary": {
             "participant_number": result.participant_number,
