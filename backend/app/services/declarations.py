@@ -4,11 +4,12 @@ A saved ``TaxCalculation`` carries the per-sale advance tax (``omavero.veron_maa
 inside its stored JSON) and, once the user has filed/paid it in OmaVero, a
 ``declared_at`` timestamp plus the actual ``paid_amount_eur`` / ``paid_date``.
 
-Finnish capital-gains tax is assessed once per year on the cumulative total, and
-the per-sale figures are *marginal* (they stack chronologically), so they sum
-exactly to the year's total advance tax. This module turns a list of saved
-calculations into a Total / Declared / Remaining view plus a paid-vs-computed
-reconciliation for the sales the user has actually paid.
+**What this module deliberately does NOT compute: a balance.** The app cannot see
+the tax account — instalments already charged, salary withholding, refunds and
+reallocations are all invisible to it — so any "still to pay" figure would be a
+guess presented as a fact. Only OmaVero knows the balance. What the app *can*
+honestly report is per-sale status: which sales have been declared and paid, and
+which have not.
 """
 
 from dataclasses import dataclass
@@ -35,6 +36,9 @@ class DeclarationSale:
     proceeds_eur: Decimal = ZERO  # Luovutushinta / myyntihinta
     acquisition_cost_eur: Decimal = ZERO  # Hankintameno (käytetty vähennys)
     gain_eur: Decimal = ZERO  # Luovutusvoitto (>0) tai -tappio (<0)
+    # Provenance: which tax-engine build produced this row.
+    engine_version: Optional[str] = None
+    is_legacy: bool = False
 
 
 def per_sale_tax(calculation_json: dict) -> Decimal:
@@ -80,17 +84,19 @@ def _money(value) -> str:
 
 
 def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: str) -> dict:
-    """Aggregate per-sale declaration status into year totals + reconciliation.
+    """Aggregate per-sale declaration status into year totals.
 
-    Returns a JSON-serialisable dict with string money values (2 dp).
+    Returns a JSON-serialisable dict with string money values (2 dp). Reports the
+    year's computed tax and which sales are settled — never a payable balance,
+    which only OmaVero can know.
     """
     total_tax = ZERO
     declared_tax = ZERO
-    remaining_tax = ZERO
+    undeclared_tax = ZERO
     total_paid = ZERO
-    computed_for_paid = ZERO  # computed tax of declared sales that have a paid amount
     declared_count = 0
     paid_count = 0
+    legacy_count = 0
 
     # OmaVero form-field totals for the year.
     total_proceeds = ZERO  # Luovutushinnat
@@ -105,12 +111,13 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
         if s.declared:
             declared_count += 1
             declared_tax += s.computed_tax_eur
-            if s.paid_amount_eur is not None:
-                paid_count += 1
-                total_paid += s.paid_amount_eur
-                computed_for_paid += s.computed_tax_eur
         else:
-            remaining_tax += s.computed_tax_eur
+            undeclared_tax += s.computed_tax_eur
+        if s.paid_amount_eur is not None:
+            paid_count += 1
+            total_paid += s.paid_amount_eur
+        if s.is_legacy:
+            legacy_count += 1
 
         total_proceeds += s.proceeds_eur
         total_acquisition += s.acquisition_cost_eur
@@ -134,17 +141,11 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
                 "acquisition_cost_eur": _money(s.acquisition_cost_eur),
                 "gain_eur": _money(s.gain_eur) if s.gain_eur >= 0 else "0.00",
                 "loss_eur": _money(-s.gain_eur) if s.gain_eur < 0 else "0.00",
+                # Provenance: which engine build produced this row.
+                "engine_version": s.engine_version,
+                "is_legacy": s.is_legacy,
             }
         )
-
-    over_under = total_paid - computed_for_paid  # >0 overpaid, <0 underpaid on declared sales
-
-    # Payment-aware year balance: the year's total liability is total_tax; net it
-    # against what has ACTUALLY been paid so far. An overpayment on an early sale
-    # therefore reduces what still needs to be paid to even out the full year
-    # (rather than paying the raw computed tax of every remaining sale on top).
-    remaining_to_pay = total_tax - total_paid  # signed: >0 still owe, <0 overpaid overall
-    year_balance = total_paid - total_tax  # >0 overpaid overall (refund), <0 still owe
 
     return {
         "year": year,
@@ -152,16 +153,16 @@ def summarize_declarations(sales: list[DeclarationSale], *, year: int, symbol: s
         "sale_count": len(ordered),
         "declared_count": declared_count,
         "paid_count": paid_count,
+        "legacy_count": legacy_count,
+        # The year's computed advance tax across the tracked sales, split by
+        # whether the sale has been declared in OmaVero yet.
         "total_tax_eur": _money(total_tax),
         "declared_tax_eur": _money(declared_tax),
-        "remaining_tax_eur": _money(remaining_tax),
+        "undeclared_tax_eur": _money(undeclared_tax),
+        # What the user recorded as actually paid. Informational only: it is
+        # never netted into a balance, because the app cannot see the tax
+        # account (instalments, salary withholding, refunds, reallocations).
         "total_paid_eur": _money(total_paid),
-        "computed_for_paid_eur": _money(computed_for_paid),
-        "over_under_eur": _money(over_under),
-        # Payment-aware remaining (nets actual payments against the year liability)
-        "remaining_to_pay_eur": _money(max(ZERO, remaining_to_pay)),
-        "year_balance_eur": _money(year_balance),
-        "overpaid_overall": year_balance > 0,
         "fully_declared": len(ordered) > 0 and declared_count == len(ordered),
         # OmaVero form-field totals for the year
         "total_proceeds_eur": _money(total_proceeds),

@@ -91,6 +91,15 @@ interface TaxCalculation {
     quantity_covered: number;
     shortfall_qty: number;
   };
+  omavero_submission?: {
+    year: number;
+    sale_is_recorded: boolean;
+    cumulative_luovutushinnat_eur: number;
+    cumulative_hankintamenot_eur: number;
+    cumulative_luovutusvoitot_eur: number;
+    expected_ennakkovero_increase_eur: number;
+    sale_count: number;
+  };
   lots_consumed: TaxLot[];
   notes: string[];
 }
@@ -114,6 +123,59 @@ function pct(rate: number): string {
 }
 
 type Bracket = NonNullable<TaxCalculation['bracket']>;
+type Submission = NonNullable<TaxCalculation['omavero_submission']>;
+
+/** The two numbers needed to update the ennakkovero in OmaVero after a sale.
+ *
+ * Changing the advance tax takes the CUMULATIVE gain for the whole year, not a
+ * per-sale figure — Verohallinto recalculates the year and reissues the
+ * instalments. Showing only this sale's tax (as the app used to) left no way to
+ * tell what to type in, or to check the resulting decision.
+ */
+function OmaVeroActionCard({ s }: { s: Submission }) {
+  return (
+    <div className="rounded-lg border-2 border-amber-500/40 bg-amber-500/5 p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <Receipt className="h-4 w-4 text-amber-500" />
+        <h4 className="font-semibold text-sm">Ennakkoveron muutos OmaVerossa</h4>
+      </div>
+
+      <p className="text-xs text-muted-foreground mb-3">
+        Ennakkoveron muutokseen ilmoitetaan koko vuoden {s.year} kertyneet luovutusvoitot
+        ({s.sale_count} myynti{s.sale_count === 1 ? '' : 'ä'}), ei yksittäistä myyntiä.
+      </p>
+
+      <div className="space-y-2">
+        <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+          <span className="text-sm">Luovutushinnat yhteensä {s.year}</span>
+          <span className="font-mono font-bold">€{eur(s.cumulative_luovutushinnat_eur)}</span>
+        </div>
+        <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+          <span className="text-sm">Hankintamenot yhteensä {s.year}</span>
+          <span className="font-mono font-bold">€{eur(s.cumulative_hankintamenot_eur)}</span>
+        </div>
+        <div className="flex justify-between items-center py-1.5 border-b border-border/50">
+          <span className="text-sm font-semibold">Luovutusvoitot yhteensä {s.year}</span>
+          <span className="font-mono font-bold text-lg text-amber-400">
+            €{eur(s.cumulative_luovutusvoitot_eur)}
+          </span>
+        </div>
+        <div className="flex justify-between items-center py-1.5">
+          <span className="text-sm">Ennakkoveron pitäisi nousta n.</span>
+          <span className="font-mono font-bold text-lg">
+            €{eur(s.expected_ennakkovero_increase_eur)}
+          </span>
+        </div>
+      </div>
+
+      <p className="mt-3 text-xs text-muted-foreground">
+        Verohallinnon päätöksen korotus voi poiketa tästä: se laskee samalla uudelleen myös
+        palkkatulon ennakonpidätyksen. Maksa se summa, jonka OmaVero näyttää avoimena.
+        {!s.sale_is_recorded && ' Tämä myynti ei ole vielä tapahtumissa, joten se on lisätty summiin laskennallisesti.'}
+      </p>
+    </div>
+  );
+}
 
 /** Visualises where this sale's gain lands on the per-year €30k / 34% bracket. */
 function BracketCard({ b }: { b: Bracket }) {
@@ -298,25 +360,30 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
 
   // Sync the declaration form whenever the dialog opens on a different sale or
   // its saved declaration state changes.
+  //
+  // The paid amount is deliberately NOT pre-filled with the computed tax. Doing
+  // so recorded a payment that had never been made, leaving genuine payments
+  // indistinguishable from defaults. Leave it blank unless a real amount was
+  // entered before.
   useEffect(() => {
     if (!open) return;
     const declared = existingCalc?.declared ?? false;
     setDeclChecked(declared);
-    setPaidAmount(
-      existingCalc?.paid_amount_eur ??
-        (computedTax ? computedTax.toFixed(2) : '')
-    );
+    setPaidAmount(existingCalc?.paid_amount_eur ?? '');
     setPaidDate(existingCalc?.paid_date ?? today);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, existingCalc?.id, existingCalc?.declared, existingCalc?.paid_amount_eur, existingCalc?.paid_date, computedTax]);
+  }, [open, existingCalc?.id, existingCalc?.declared, existingCalc?.paid_amount_eur, existingCalc?.paid_date]);
 
   const declMutation = useMutation({
     mutationFn: async () => {
       if (!effectiveId) throw new Error('Save the calculation first');
+      // An empty amount stays empty: the sale is marked declared without
+      // claiming a payment that may not have happened.
+      const trimmedAmount = paidAmount.trim();
       return api.setTaxCalculationDeclaration(effectiveId, {
         declared: declChecked,
-        paid_amount_eur: declChecked ? (paidAmount || computedTax.toFixed(2)) : null,
-        paid_date: declChecked ? paidDate : null,
+        paid_amount_eur: declChecked && trimmedAmount ? trimmedAmount : null,
+        paid_date: declChecked && trimmedAmount ? paidDate : null,
       });
     },
     onSuccess: () => {
@@ -325,7 +392,9 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
       toast({
         title: declChecked ? 'Marked declared' : 'Cleared',
         description: declChecked
-          ? 'Saved as declared & paid.'
+          ? paidAmount.trim()
+            ? 'Saved as declared, with the payment you entered.'
+            : 'Saved as declared. No payment amount recorded.'
           : 'Declaration cleared.',
       });
     },
@@ -399,6 +468,11 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
 
             {/* 30k bracket positioning */}
             {taxCalc.bracket && <BracketCard b={taxCalc.bracket} />}
+
+            {/* What to enter in OmaVero to update the ennakkovero */}
+            {taxCalc.omavero_submission && (
+              <OmaVeroActionCard s={taxCalc.omavero_submission} />
+            )}
 
             {/* OmaVero Fields */}
             <div className="rounded-lg border-2 border-blue-500/30 bg-blue-500/5 p-4">

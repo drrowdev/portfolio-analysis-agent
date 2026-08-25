@@ -220,12 +220,21 @@ def _dividends_for_year(
 
 
 def compute_capital_income(
-    txns: list[IncomeTxn], year: int, before_date: date | None = None
+    txns: list[IncomeTxn],
+    year: int,
+    before_date: date | None = None,
+    include_dividends: bool = True,
 ) -> CapitalIncomeSummary:
     """Aggregate a year's taxable capital income and the 30/34% bracket position.
 
     When ``before_date`` is given, only income realised strictly before that date
     is counted (used to compute the prior YTD income a sale stacks on top of).
+
+    ``include_dividends=False`` keeps dividends out of ``combined_taxable_eur``
+    (they are still reported in ``dividends``/``gross_dividends_eur``). The
+    ennakkovero path uses this because dividends are declared on the annual
+    return, not via the advance-tax application — so the bracket must be built
+    from the same gains-only base that Verohallinto is given.
     """
     sales, excluded_ost_sales = _taxable_gains_for_year(txns, year, before_date)
     dividends, excluded_ost_div, _ = _dividends_for_year(txns, year, before_date)
@@ -234,7 +243,7 @@ def compute_capital_income(
     gross_div = sum((d.gross_eur for d in dividends), Decimal("0"))
     taxable_div = sum((d.taxable_eur for d in dividends), Decimal("0"))
 
-    combined = taxable_gains + taxable_div
+    combined = taxable_gains + (taxable_div if include_dividends else Decimal("0"))
     tax, eff = tax_math.capital_gains_tax(combined)
     threshold = tax_math.BRACKET_THRESHOLD
     positive_combined = combined if combined > 0 else Decimal("0")

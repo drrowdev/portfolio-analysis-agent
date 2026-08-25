@@ -17,9 +17,16 @@ from app.database import get_db
 from app.models.tax_calculation import TaxCalculation
 from app.models.transaction import Transaction, TransactionType
 from app.services import declarations as decl
+from app.services import espp_scope
 from app.services import tax as tax_math  # noqa: F401  (kept for potential reuse)
 
 router = APIRouter(prefix="/transactions/tax-calculations", tags=["tax-calculations"])
+
+#: Bumped whenever a change to the tax engine can alter an already-saved result.
+#: Saved rows carrying an older (or missing) version are flagged as legacy so a
+#: silent recalculation like the June 2026 engine rewrite is visible instead of
+#: quietly contradicting an amount that was already declared and paid.
+TAX_ENGINE_VERSION = "2026.08"
 
 
 class TaxCalculationCreate(BaseModel):
@@ -46,6 +53,8 @@ class TaxCalculationRead(BaseModel):
     declared_at: Optional[str] = None
     paid_amount_eur: Optional[str] = None
     paid_date: Optional[date] = None
+    engine_version: Optional[str] = None
+    is_legacy: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -69,7 +78,10 @@ async def save_tax_calculation(
     """Save a tax calculation and auto-link to the matching sell transaction."""
     from decimal import Decimal
 
-    # Try to find the matching sell transaction
+    # Try to find the matching sell transaction, within the ESPP account only —
+    # linking to a Nordnet sale would drag a broker-reported trade into this
+    # tracker's declaration summary.
+    account_ids = await espp_scope.espp_account_ids(db)
     sell_types = [TransactionType.sell, TransactionType.espp_sale]
     stmt = (
         select(Transaction)
@@ -79,6 +91,8 @@ async def save_tax_calculation(
         .order_by(Transaction.created_at.desc())
         .limit(5)
     )
+    if account_ids:
+        stmt = stmt.where(Transaction.account_id.in_(account_ids))
     result = await db.execute(stmt)
     sells = list(result.scalars().all())
 
@@ -107,7 +121,17 @@ async def save_tax_calculation(
             .where(TaxCalculation.quantity_sold == payload.quantity_sold)
         )
     existing = list((await db.execute(dup_stmt)).scalars().all())
+    # Carry the declaration/payment record across the replace. Re-saving after an
+    # engine correction must not silently un-declare a sale or discard a payment
+    # amount the user actually typed — that is the very record the engine-version
+    # warning asks them to come back and verify.
+    declared_at = None
+    paid_amount_eur = None
+    paid_date = None
     for old in existing:
+        declared_at = declared_at or old.declared_at
+        paid_amount_eur = paid_amount_eur or old.paid_amount_eur
+        paid_date = paid_date or old.paid_date
         await db.delete(old)
 
     calc = TaxCalculation(
@@ -118,6 +142,10 @@ async def save_tax_calculation(
         fees_eur=payload.fees_eur,
         calculation_json=json.dumps(payload.calculation_json),
         transaction_id=transaction_id,
+        engine_version=TAX_ENGINE_VERSION,
+        declared_at=declared_at,
+        paid_amount_eur=paid_amount_eur,
+        paid_date=paid_date,
     )
     db.add(calc)
     await db.commit()
@@ -148,16 +176,24 @@ async def list_tax_calculations(
 @router.get("/declaration-summary")
 async def declaration_summary(
     year: int = Query(..., description="Calendar year to summarise"),
-    symbol: str = Query("MSFT", description="Symbol to summarise (MSFT is the only filed symbol)"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Summarise ennakkovero declaration status for a year.
 
-    Returns the total advance tax across the year's saved per-sale calculations,
-    split into already-declared vs still-to-declare, plus a paid-vs-computed
-    reconciliation for the sales the user has actually paid. The per-sale figures
-    are marginal and stack chronologically, so they sum to the year's total.
+    Covers the Fidelity ESPP position only (see :mod:`app.services.espp_scope`):
+    Nordnet sales are reported to Verohallinto by the broker and must never be
+    declared here. Reports the year's computed advance tax and which sales have
+    been declared/paid — deliberately not a payable balance, which only OmaVero
+    can know.
     """
+    symbol = espp_scope.ESPP_SYMBOL
+    account_ids = await espp_scope.espp_account_ids(db)
+    if not account_ids:
+        # Fail closed, matching require_espp_scope(): with no ESPP account there
+        # can be no ESPP sales. Returning every saved MSFT row would pull in
+        # Nordnet sales the broker already reports to Verohallinto.
+        return decl.summarize_declarations([], year=year, symbol=symbol)
+
     stmt = (
         select(TaxCalculation)
         .where(TaxCalculation.symbol == symbol)
@@ -166,6 +202,23 @@ async def declaration_summary(
     )
     result = await db.execute(stmt)
     rows = list(result.scalars().all())
+
+    # Drop anything linked to a transaction outside the ESPP account. Rows with
+    # no linked transaction predate transaction linking (or were computed for a
+    # hypothetical sale); they are kept, since linking is now account-scoped so
+    # a non-ESPP sale can no longer acquire an ESPP link.
+    linked_ids = [tc.transaction_id for tc in rows if tc.transaction_id is not None]
+    in_scope: set = set()
+    if linked_ids:
+        tx_result = await db.execute(
+            select(Transaction.id)
+            .where(Transaction.id.in_(linked_ids))
+            .where(Transaction.account_id.in_(account_ids))
+        )
+        in_scope = set(tx_result.scalars().all())
+    rows = [
+        tc for tc in rows if tc.transaction_id is None or tc.transaction_id in in_scope
+    ]
 
     sales = []
     for tc in rows:
@@ -184,6 +237,8 @@ async def declaration_summary(
                 proceeds_eur=ov["proceeds"],
                 acquisition_cost_eur=ov["acquisition"],
                 gain_eur=ov["gain"],
+                engine_version=tc.engine_version,
+                is_legacy=tc.engine_version != TAX_ENGINE_VERSION,
             )
         )
     return decl.summarize_declarations(sales, year=year, symbol=symbol)
@@ -326,6 +381,8 @@ def _to_read(tc: TaxCalculation) -> TaxCalculationRead:
         declared_at=tc.declared_at.isoformat() if tc.declared_at else None,
         paid_amount_eur=tc.paid_amount_eur,
         paid_date=tc.paid_date,
+        engine_version=tc.engine_version,
+        is_legacy=tc.engine_version != TAX_ENGINE_VERSION,
     )
 
 
