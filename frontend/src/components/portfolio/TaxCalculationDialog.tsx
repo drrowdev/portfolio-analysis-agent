@@ -16,8 +16,18 @@ import { toast } from '@/hooks/useToast';
 interface SavedCalcMeta {
   id: string;
   declared: boolean;
-  paid_amount_eur: string | null;
+  /**
+   * The API sends decimals as strings, but the response coercion in `api.ts`
+   * turns a numeric string like "6464.15" into a number, so both shapes arrive
+   * here. Typing it honestly keeps string-only operations off this value.
+   */
+  paid_amount_eur: string | number | null;
   paid_date: string | null;
+}
+
+/** Normalise an API decimal into the string the amount input expects. */
+function amountToInput(value: string | number | null | undefined): string {
+  return value === null || value === undefined ? '' : String(value);
 }
 
 interface TaxCalculationDialogProps {
@@ -298,8 +308,22 @@ function BracketCard({ b }: { b: Bracket }) {
 }
 
 export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingCalc }: TaxCalculationDialogProps) {
-  const [savedId, setSavedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  // The dialog stays mounted while the page swaps sales into it, so an id saved
+  // for one sale must never be reused for the next one — that sent a sale's
+  // declaration to whichever sale happened to be saved before it. Tying the id
+  // to the sale it belongs to makes a stale id impossible.
+  const saleKey = sellParams
+    ? [
+        sellParams.symbol,
+        sellParams.sell_date,
+        sellParams.quantity,
+        sellParams.sell_price_eur,
+      ].join('|')
+    : null;
+  const [saved, setSaved] = useState<{ saleKey: string; id: string } | null>(null);
+  const savedId = saved && saved.saleKey === saleKey ? saved.id : null;
 
   const { data: taxCalc, isLoading, error } = useQuery<TaxCalculation>({
     queryKey: ['tax-calculation', sellParams],
@@ -332,7 +356,7 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
       return result;
     },
     onSuccess: (data) => {
-      setSavedId(data.id);
+      if (saleKey) setSaved({ saleKey, id: data.id });
       queryClient.invalidateQueries({ queryKey: ['tax-calculations-list'] });
       queryClient.invalidateQueries({ queryKey: ['capital-income-summary'] });
       queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
@@ -343,14 +367,17 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
     },
   });
 
+  // The saved calculation this dialog acts on: the one just saved for this sale,
+  // otherwise the one already stored against this sale's transaction.
+  const effectiveId = savedId ?? existingCalc?.id ?? null;
+
   const handleDownloadPdf = () => {
-    if (!savedId) return;
-    const url = api.getTaxCalculationPdfUrl(savedId);
+    if (!effectiveId) return;
+    const url = api.getTaxCalculationPdfUrl(effectiveId);
     window.open(url, '_blank');
   };
 
   // --- Declaration / paid tracking ------------------------------------------
-  const effectiveId = savedId ?? existingCalc?.id ?? null;
   const computedTax = taxCalc?.omavero.veron_maara ?? 0;
   const today = new Date().toISOString().slice(0, 10);
 
@@ -368,8 +395,9 @@ export function TaxCalculationDialog({ open, onOpenChange, sellParams, existingC
   useEffect(() => {
     if (!open) return;
     const declared = existingCalc?.declared ?? false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDeclChecked(declared);
-    setPaidAmount(existingCalc?.paid_amount_eur ?? '');
+    setPaidAmount(amountToInput(existingCalc?.paid_amount_eur));
     setPaidDate(existingCalc?.paid_date ?? today);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, existingCalc?.id, existingCalc?.declared, existingCalc?.paid_amount_eur, existingCalc?.paid_date]);

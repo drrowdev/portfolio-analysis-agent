@@ -276,6 +276,8 @@ export const api = {
     if (params?.symbol) query.set('symbol', params.symbol);
     if (params?.year) query.set('year', String(params.year));
     const qs = query.toString();
+    // Decimal fields are sent as strings but pass through coerceNumbers(), which
+    // turns "6464.15" into a number — so callers must handle both shapes.
     return request<
       {
         id: string;
@@ -284,7 +286,7 @@ export const api = {
         sell_date: string;
         declared: boolean;
         declared_at: string | null;
-        paid_amount_eur: string | null;
+        paid_amount_eur: string | number | null;
         paid_date: string | null;
       }[]
     >(`/transactions/tax-calculations/${qs ? '?' + qs : ''}`);
@@ -335,7 +337,7 @@ export const api = {
         computed_tax_eur: string;
         declared: boolean;
         declared_at: string | null;
-        paid_amount_eur: string | null;
+        paid_amount_eur: string | number | null;
         paid_date: string | null;
         proceeds_eur: string;
         acquisition_cost_eur: string;
