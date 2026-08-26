@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Circle,
   AlertTriangle,
+  ExternalLink,
 } from 'lucide-react';
 
 function eur2(value: number): string {
@@ -36,20 +37,16 @@ export function EnnakkoveroTracker() {
     queryFn: () => api.getDeclarationSummary(year),
   });
 
+  // Toggling only records WHETHER a sale has been settled. It deliberately does
+  // not invent an amount or a date: pre-filling those with the computed tax made
+  // untouched rows indistinguishable from genuinely paid ones. Enter the real
+  // amount in the sale's calculation dialog if you want it recorded.
   const toggle = useMutation({
-    mutationFn: ({
-      id,
-      declared,
-      paid_amount_eur,
-    }: {
-      id: string;
-      declared: boolean;
-      paid_amount_eur: string;
-    }) =>
+    mutationFn: ({ id, declared }: { id: string; declared: boolean }) =>
       api.setTaxCalculationDeclaration(id, {
         declared,
-        paid_amount_eur: declared ? paid_amount_eur : null,
-        paid_date: declared ? new Date().toISOString().slice(0, 10) : null,
+        paid_amount_eur: null,
+        paid_date: null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['declaration-summary'] });
@@ -65,7 +62,7 @@ export function EnnakkoveroTracker() {
     return (
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium">Ennakkovero — declared vs remaining (MSFT)</CardTitle>
+          <CardTitle className="text-sm font-medium">Ennakkovero — MSFT (ESPP)</CardTitle>
         </CardHeader>
         <CardContent>
           <Skeleton className="h-[120px] w-full" />
@@ -75,15 +72,11 @@ export function EnnakkoveroTracker() {
   }
 
   const total = Number(data?.total_tax_eur ?? 0);
-  const remainingToPay = Number(data?.remaining_to_pay_eur ?? 0);
-  const paid = Number(data?.total_paid_eur ?? 0);
-  const yearBalance = Number(data?.year_balance_eur ?? 0);
-  const overpaidOverall = data?.overpaid_overall ?? false;
-  const overUnder = Number(data?.over_under_eur ?? 0);
-  const paidCount = data?.paid_count ?? 0;
+  const undeclared = Number(data?.undeclared_tax_eur ?? 0);
+  const declaredCount = data?.declared_count ?? 0;
+  const legacyCount = data?.legacy_count ?? 0;
   const sales = data?.sales ?? [];
   const hasSales = sales.length > 0;
-  const paidPct = total > 0 ? Math.min(100, (paid / total) * 100) : 0;
 
   const totProceeds = Number(data?.total_proceeds_eur ?? 0);
   const totAcquisition = Number(data?.total_acquisition_cost_eur ?? 0);
@@ -96,7 +89,7 @@ export function EnnakkoveroTracker() {
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium flex items-center gap-1.5">
             <Receipt className="h-4 w-4 text-muted-foreground" />
-            Ennakkovero — declared vs remaining (MSFT)
+            Ennakkovero — MSFT (ESPP)
           </CardTitle>
           <div className="flex items-center gap-1">
             <button onClick={() => setYear((y) => y - 1)} className="p-0.5 rounded hover:bg-muted">
@@ -116,66 +109,61 @@ export function EnnakkoveroTracker() {
       <CardContent>
         {!hasSales ? (
           <p className="text-sm text-muted-foreground text-center py-4">
-            No saved MSFT tax calculations for {year}. Open a MSFT sale and save its calculation to
+            No saved ESPP tax calculations for {year}. Open a MSFT sale and save its calculation to
             track its ennakkovero here.
           </p>
         ) : (
           <div className="space-y-3">
-            {/* Headline: remaining to PAY (nets actual payments vs year liability) */}
+            {/* The year's computed advance tax across the tracked ESPP sales.
+                Deliberately NOT a balance: the app cannot see the tax account. */}
             <div className="flex items-baseline justify-between">
               <div>
-                <span className="text-2xl font-bold tabular-nums">{mask(eur2(remainingToPay))}</span>
-                <span className="text-xs text-muted-foreground ml-2">still to pay</span>
+                <span className="text-2xl font-bold tabular-nums">{mask(eur2(total))}</span>
+                <span className="text-xs text-muted-foreground ml-2">
+                  advance tax on {year} ESPP sales
+                </span>
               </div>
               <span className="text-xs text-muted-foreground">
-                {mask(eur2(paid))} of {mask(eur2(total))} paid
+                {declaredCount} of {sales.length} declared
               </span>
             </div>
 
-            {/* Progress: actually paid / total year liability */}
-            <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  remainingToPay <= 0 ? 'bg-emerald-500' : 'bg-sky-500'
-                }`}
-                style={{ width: `${paidPct}%` }}
-              />
-            </div>
-
-            {overpaidOverall ? (
-              <p className="text-sm text-emerald-600 dark:text-emerald-500 flex items-center gap-1.5">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                Year over-covered — you've paid {mask(eur2(yearBalance))} more than the {year} total;
-                the assessment refunds the surplus.
-              </p>
-            ) : remainingToPay <= 0 ? (
-              <p className="text-sm text-emerald-600 dark:text-emerald-500 flex items-center gap-1.5">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                {year} MSFT advance tax fully paid.
+            {/* Keyed on declaration status, not on the tax amount: a year whose
+                undeclared sales are all losses has undeclared tax of 0 while
+                still being entirely undeclared. */}
+            {declaredCount < sales.length ? (
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {sales.length - declaredCount}
+                </span>{' '}
+                sale{sales.length - declaredCount === 1 ? '' : 's'} not yet declared in OmaVero
+                {undeclared > 0 && <> — {mask(eur2(undeclared))} of advance tax</>}.
               </p>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">{mask(eur2(remainingToPay))}</span> still
-                to pay in OmaVero to even out the full {year} year.
+              <p className="text-sm text-emerald-600 dark:text-emerald-500 flex items-center gap-1.5">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                All {year} ESPP sales declared.
               </p>
             )}
 
-            {/* Explain how prior over/under-payments net into the amount still to pay */}
-            {paidCount > 0 && Math.abs(overUnder) >= 0.01 && (
-              <div
-                className={`flex items-start gap-1.5 text-xs rounded-md p-2 ${
-                  overUnder > 0
-                    ? 'text-amber-600 dark:text-amber-500 bg-amber-500/10'
-                    : 'text-red-600 dark:text-red-500 bg-red-500/10'
-                }`}
-              >
+            {/* What the app cannot know. Previously this card showed a computed
+                "still to pay", which contradicted the actual tax decision. */}
+            <div className="flex items-start gap-1.5 text-xs rounded-md p-2 bg-muted/50 text-muted-foreground">
+              <ExternalLink className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>
+                This is the tax on these sales — not your balance. Instalments already charged,
+                salary withholding and refunds are invisible here. Check OmaVero for what is actually
+                open, and pay that.
+              </span>
+            </div>
+
+            {legacyCount > 0 && (
+              <div className="flex items-start gap-1.5 text-xs rounded-md p-2 text-amber-600 dark:text-amber-500 bg-amber-500/10">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>
-                  You've already paid {mask(eur2(Math.abs(overUnder)))}{' '}
-                  {overUnder > 0 ? 'more' : 'less'} than the corrected tax on declared sales. That{' '}
-                  {overUnder > 0 ? 'surplus reduces' : 'shortfall is added to'} the amount still to
-                  pay above, so you {overUnder > 0 ? 'can pay less' : 'need to pay more'} to even out
-                  the year — no excess.
+                  {legacyCount} calculation{legacyCount === 1 ? ' was' : 's were'} produced by an
+                  older version of the tax engine. Re-open and re-save {legacyCount === 1 ? 'it' : 'them'}{' '}
+                  to check the figures still match what you declared.
                 </span>
               </div>
             )}
@@ -212,12 +200,10 @@ export function EnnakkoveroTracker() {
                     <div className="flex items-center justify-between gap-2 text-xs py-1.5 px-1">
                       {/* Declared toggle */}
                       <button
-                        onClick={() =>
-                          toggle.mutate({ id: s.id, declared: !s.declared, paid_amount_eur: s.computed_tax_eur })
-                        }
+                        onClick={() => toggle.mutate({ id: s.id, declared: !s.declared })}
                         disabled={toggle.isPending}
                         className="flex items-center gap-2 disabled:opacity-50"
-                        title={s.declared ? 'Mark as not yet declared' : 'Mark as declared & paid'}
+                        title={s.declared ? 'Mark as not yet declared' : 'Mark as declared in OmaVero'}
                       >
                         {s.declared ? (
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
@@ -226,6 +212,14 @@ export function EnnakkoveroTracker() {
                         )}
                         <span className="text-muted-foreground">{fiDate(s.sell_date)}</span>
                         <span className="tabular-nums">{Number(s.quantity_sold)} kpl</span>
+                        {s.is_legacy && (
+                          <span
+                            className="text-[10px] uppercase tracking-wide text-amber-500"
+                            title="Produced by an older tax engine — re-save to verify"
+                          >
+                            legacy
+                          </span>
+                        )}
                       </button>
                       {/* Tax + expand */}
                       <button
@@ -233,13 +227,13 @@ export function EnnakkoveroTracker() {
                         className="flex items-center gap-2"
                         title="Näytä OmaVero-kentät"
                       >
-                        {s.declared && s.paid_amount_eur && (
+                        {s.paid_amount_eur && (
                           <span className="text-muted-foreground">
                             paid {mask(eur2(Number(s.paid_amount_eur)))}
                             {s.paid_date ? ` · ${fiDate(s.paid_date)}` : ''}
                           </span>
                         )}
-                        <span className={`font-mono ${s.declared ? 'text-muted-foreground line-through' : 'font-semibold'}`}>
+                        <span className={`font-mono ${s.declared ? 'text-muted-foreground' : 'font-semibold'}`}>
                           {mask(eur2(Number(s.computed_tax_eur)))}
                         </span>
                         <ChevronDown
@@ -274,9 +268,9 @@ export function EnnakkoveroTracker() {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Per-sale figures are marginal and stack chronologically, so they sum to the year's
-              total advance tax. Click the circle to toggle declared (defaults to the computed amount
-              and today's date); click a row's tax/chevron to see its OmaVero fields.
+              Covers MSFT in the Fidelity ESPP account only — Nordnet reports its own sales to
+              Verohallinto. Click the circle to mark a sale declared; click its tax to see the
+              OmaVero fields.
             </p>
           </div>
         )}

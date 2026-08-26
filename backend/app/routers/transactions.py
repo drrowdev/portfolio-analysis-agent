@@ -1,10 +1,10 @@
 """Transaction history API."""
 
+import uuid
 from datetime import date
 from decimal import Decimal
 from typing import Optional
-
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.models.account import Account
 from app.models.transaction import Transaction, TransactionType
 from app.schemas.transaction import TransactionCreate, TransactionRead
 from app.services import capital_income as cap_income
+from app.services import espp_scope
 from app.services import fx as fx_convert
 from app.services import tax as tax_math
 from app.services.cost_basis import acquisition_unit_cost_eur
@@ -491,7 +492,11 @@ async def trigger_dividend_check(
 
 
 async def _year_capital_income(
-    db: AsyncSession, year: int, before_date: Optional[date] = None
+    db: AsyncSession,
+    year: int,
+    before_date: Optional[date] = None,
+    account_ids: Optional[list[uuid.UUID]] = None,
+    include_dividends: bool = True,
 ) -> cap_income.CapitalIncomeSummary:
     """Compute the tracked taxable capital-income summary for ``year``.
 
@@ -500,6 +505,11 @@ async def _year_capital_income(
     service). When ``before_date`` is given, only income realised strictly before
     that date is counted — used to position a later sale's gain on the per-year
     30 %/34 % bracket.
+
+    ``account_ids`` restricts the data set to specific accounts. The ennakkovero
+    path passes the ESPP account so the bracket reflects the same income base the
+    user actually submits to OmaVero; the standalone summary endpoint passes
+    nothing and keeps its whole-portfolio view.
     """
     acc_result = await db.execute(select(Account))
     treatment_by_id = {str(a.id): a.tax_treatment.value for a in acc_result.scalars().all()}
@@ -511,11 +521,10 @@ async def _year_capital_income(
         TransactionType.espp_sale,
         TransactionType.dividend,
     ]
-    tx_result = await db.execute(
-        select(Transaction)
-        .where(Transaction.transaction_type.in_(relevant))
-        .order_by(Transaction.date)
-    )
+    stmt = select(Transaction).where(Transaction.transaction_type.in_(relevant))
+    if account_ids is not None:
+        stmt = stmt.where(Transaction.account_id.in_(account_ids))
+    tx_result = await db.execute(stmt.order_by(Transaction.date))
     rows = list(tx_result.scalars().all())
     txns = [
         cap_income.IncomeTxn(
@@ -531,7 +540,9 @@ async def _year_capital_income(
         )
         for t in rows
     ]
-    return cap_income.compute_capital_income(txns, year, before_date)
+    return cap_income.compute_capital_income(
+        txns, year, before_date, include_dividends=include_dividends
+    )
 
 
 @router.get("/tax-calculation")
@@ -555,11 +566,20 @@ async def compute_tax_calculation(
     from collections import defaultdict
     from datetime import timedelta
 
+    # 0. Scope guard. Lots must come from the Fidelity ESPP account only —
+    # selecting by symbol alone would pool in any MSFT held at Nordnet, which
+    # the broker already reports to Verohallinto.
+    try:
+        account_ids = await espp_scope.require_espp_scope(db, symbol)
+    except espp_scope.EsppScopeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # 1. Fetch all buy/ESPP purchase lots for this symbol (FIFO order)
     buy_types = [TransactionType.buy, TransactionType.espp_purchase]
     buy_stmt = (
         select(Transaction)
         .where(Transaction.symbol == symbol)
+        .where(Transaction.account_id.in_(account_ids))
         .where(Transaction.transaction_type.in_(buy_types))
         .order_by(Transaction.date)
     )
@@ -571,6 +591,7 @@ async def compute_tax_calculation(
     prior_sell_stmt = (
         select(Transaction)
         .where(Transaction.symbol == symbol)
+        .where(Transaction.account_id.in_(account_ids))
         .where(Transaction.transaction_type.in_(sell_types))
         .where(Transaction.date <= sell_date)
         .order_by(Transaction.date)
@@ -597,16 +618,24 @@ async def compute_tax_calculation(
     # Consume lots for all prior sells EXCEPT the current one
     # (the current sell is the one matching our parameters)
     fx_rate = None
+    matched_recorded_sales = 0
     for s in prior_sells:
-        # Skip if this is the sell we're calculating for
-        if (
+        # Skip the sell we're calculating for — but only ONCE. If the ledger
+        # holds several rows with the same date, quantity and price they are
+        # genuinely separate sales, and all but the one under calculation must
+        # still consume their FIFO lots. Skipping every match left those lots
+        # unconsumed and understated the gain.
+        is_match = (
             s.quantity == quantity
             and s.date == sell_date
             and abs(float(s.price_eur or 0) - float(sell_price_eur)) < 0.01
-        ):
-            # Capture FX rate from the matching sell transaction
-            fx_rate = float(s.fx_rate) if s.fx_rate else None
-            continue
+        )
+        if is_match:
+            matched_recorded_sales += 1
+            if matched_recorded_sales == 1:
+                # Capture FX rate from the matching sell transaction
+                fx_rate = float(s.fx_rate) if s.fx_rate else None
+                continue
 
         remaining = s.quantity or Decimal("0")
         while remaining > 0 and lots:
@@ -679,14 +708,24 @@ async def compute_tax_calculation(
     result = tax_math.compute(lot_inputs, sell_price_eur, fees_eur, quantity)
 
     # --- Automatic 30 %/34 % bracket positioning -------------------------------
-    # Position this sale's gain on the per-YEAR €30k bracket using the user's
-    # capital income realised EARLIER in the same calendar year (realized gains +
-    # 85% dividends, OST excluded) — i.e. income with a date strictly before this
-    # sale. Chronological stacking means the first sales of the year fill the 30 %
-    # band first; later sales cross into 34 %. A hypothetical (unsaved) sale is
-    # naturally excluded too, since nothing is dated on/after it.
+    # Position this sale's gain on the per-YEAR €30k bracket using the ESPP
+    # capital gains realised EARLIER in the same calendar year — i.e. gains with
+    # a date strictly before this sale. Chronological stacking means the first
+    # sales of the year fill the 30 % band first; later sales cross into 34 %. A
+    # hypothetical (unsaved) sale is naturally excluded too, since nothing is
+    # dated on/after it.
+    #
+    # Dividends are deliberately excluded: they are declared on the annual return
+    # rather than through the advance-tax application, so Verohallinto's
+    # ennakkovero basis is gains-only and this must match it.
     year = sell_date.year
-    prior_summary = await _year_capital_income(db, year, before_date=sell_date)
+    prior_summary = await _year_capital_income(
+        db,
+        year,
+        before_date=sell_date,
+        account_ids=account_ids,
+        include_dividends=False,
+    )
     gain = result.optimum_gain_eur
     prior_income = prior_summary.combined_taxable_eur
 
@@ -721,6 +760,40 @@ async def compute_tax_calculation(
         "applies_high_rate": applies_high_rate,
         "crosses_threshold": crosses_threshold,
         "fully_above_threshold": fully_above_threshold,
+    }
+
+    # --- What to enter in OmaVero ---------------------------------------------
+    # Changing the ennakkovero in OmaVero takes the CUMULATIVE capital gains for
+    # the whole year, not a per-sale figure. Verohallinto then recalculates the
+    # year and reissues the instalments; the increase is this sale's tax. Give
+    # both numbers so the resulting decision can be sanity-checked.
+    #
+    # Prior figures come from the transaction ledger (not from saved
+    # calculations, which can be stale or missing). The full-year pass already
+    # contains every recorded sale, same-day ones included, so a sale that is
+    # already in the ledger must NOT be added again.
+    ytd_summary = await _year_capital_income(
+        db, year, account_ids=account_ids, include_dividends=False
+    )
+    recorded_proceeds = sum((s.proceeds_eur for s in ytd_summary.sales), ZERO)
+    recorded_gain = sum((s.gain_eur for s in ytd_summary.sales), ZERO)
+    sale_is_recorded = matched_recorded_sales > 0
+    if sale_is_recorded:
+        cumulative_proceeds = recorded_proceeds
+        cumulative_gain = recorded_gain
+    else:
+        # Hypothetical sale that is not in the ledger yet — add it on top.
+        cumulative_proceeds = recorded_proceeds + result.proceeds_eur
+        cumulative_gain = recorded_gain + gain
+
+    omavero_submission = {
+        "year": year,
+        "sale_is_recorded": sale_is_recorded,
+        "cumulative_luovutushinnat_eur": float(cumulative_proceeds),
+        "cumulative_hankintamenot_eur": float(cumulative_proceeds - cumulative_gain),
+        "cumulative_luovutusvoitot_eur": float(cumulative_gain),
+        "expected_ennakkovero_increase_eur": float(tax_eur),
+        "sale_count": len(ytd_summary.sales) + (0 if sale_is_recorded else 1),
     }
 
     # Annotate each consumed lot with the rate/method actually applied to it.
@@ -760,12 +833,15 @@ async def compute_tax_calculation(
         "(omistus < 10 v) tai 40 % (omistus ≥ 10 v).",
         f"Edullisin menetelmä tälle myynnille: {method_label}.",
         bracket_note,
+        "Laskelma kattaa VAIN Fidelity ESPP -tilin MSFT-osakkeet. Nordnetin "
+        "kaupat ilmoittaa välittäjä suoraan Verohallinnolle, eikä niitä oteta "
+        "tähän ennakkoveroon mukaan.",
         "Pääomatulovero: 30 % enintään 30 000 € pääomatuloista vuodessa, 34 % "
-        "ylittävältä osalta. Laskelma huomioi tässä sovelluksessa seuratut "
-        "pääomatulot (luovutusvoitot + 85 % osingoista, OST-tili pois lukien). "
-        "Sovelluksen ulkopuoliset pääomatulot (vuokratulot, korot, "
-        "listaamattomien yhtiöiden osingot ym.) lasketaan samaan 30 000 € "
-        "rajaan, mutta eivät näy tässä.",
+        "ylittävältä osalta. Tämä laskelma käyttää portaassa vain ESPP-tilin "
+        "luovutusvoittoja — samaa perustetta, jonka ilmoitat OmaVerossa. Osingot "
+        "ja muut pääomatulot (Nordnetin myynnit, vuokratulot, korot ym.) "
+        "lasketaan samaan 30 000 € rajaan lopullisessa verotuksessa, joten "
+        "todellinen veroprosentti voi olla tässä arvioitua korkeampi.",
         "Pienten luovutusten verovapaus (TVL 48.6 §): jos verovuoden KAIKKIEN "
         "omaisuuden luovutusten yhteenlasketut myyntihinnat ovat enintään "
         "1 000 €, luovutusvoitto on verovapaa. Tämä laskelma ei näe muita "
@@ -810,6 +886,9 @@ async def compute_tax_calculation(
 
         # Automatic 30%/34% bracket positioning for the year
         "bracket": bracket,
+
+        # Cumulative figures to enter when changing the ennakkovero in OmaVero
+        "omavero_submission": omavero_submission,
 
         # Comparison of single-method strategies
         "comparison": {

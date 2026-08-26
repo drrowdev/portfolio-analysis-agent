@@ -31,7 +31,8 @@ def test_declaration_update_accepts_numeric_paid_amount():
 
 
 def _sale(id, d, tax, declared=False, paid=None, paid_date=None,
-          proceeds="0", acquisition="0", gain="0"):
+          proceeds="0", acquisition="0", gain="0", engine_version="2026.08",
+          is_legacy=False):
     return DeclarationSale(
         id=id,
         sell_date=date.fromisoformat(d),
@@ -44,6 +45,8 @@ def _sale(id, d, tax, declared=False, paid=None, paid_date=None,
         proceeds_eur=Decimal(str(proceeds)),
         acquisition_cost_eur=Decimal(str(acquisition)),
         gain_eur=Decimal(str(gain)),
+        engine_version=engine_version,
+        is_legacy=is_legacy,
     )
 
 
@@ -60,11 +63,33 @@ def test_empty_summary():
     s = summarize_declarations([], year=2026, symbol="MSFT")
     assert s["sale_count"] == 0
     assert s["total_tax_eur"] == "0.00"
-    assert s["remaining_tax_eur"] == "0.00"
+    assert s["undeclared_tax_eur"] == "0.00"
     assert s["fully_declared"] is False
 
 
-def test_total_declared_remaining_split():
+def test_no_payable_balance_is_reported():
+    """The app cannot see the tax account, so it must never publish a balance.
+
+    Netting a recorded overpayment against the year's computed tax is exactly
+    what previously advised paying less than Verohallinto had invoiced.
+    """
+    sales = [
+        _sale("a", "2026-01-15", "11113.38", declared=True, paid="12456.95", paid_date="2026-01-31"),
+        _sale("b", "2026-08-05", "7031.40", declared=False),
+    ]
+    s = summarize_declarations(sales, year=2026, symbol="MSFT")
+    for banned in (
+        "remaining_to_pay_eur",
+        "year_balance_eur",
+        "overpaid_overall",
+        "over_under_eur",
+        "computed_for_paid_eur",
+        "remaining_tax_eur",
+    ):
+        assert banned not in s, f"{banned} re-introduces an unknowable balance"
+
+
+def test_total_declared_undeclared_split():
     sales = [
         _sale("a", "2026-01-15", "11113.38", declared=True, paid="12313.38", paid_date="2026-02-15"),
         _sale("b", "2026-06-01", "4975.28", declared=False),
@@ -75,29 +100,35 @@ def test_total_declared_remaining_split():
     assert s["declared_count"] == 1
     assert s["total_tax_eur"] == "18088.66"
     assert s["declared_tax_eur"] == "11113.38"
-    assert s["remaining_tax_eur"] == "6975.28"
-    # Reconciliation: paid 12313.38 vs computed 11113.38 -> overpaid 1200.00
+    assert s["undeclared_tax_eur"] == "6975.28"
+    # Recorded payments are reported as-is, never netted into a balance.
     assert s["total_paid_eur"] == "12313.38"
-    assert s["over_under_eur"] == "1200.00"
+    assert s["paid_count"] == 1
     assert s["fully_declared"] is False
-    # Payment-aware remaining: full-year 18088.66 - paid 12313.38 = 5775.28
-    # (i.e. the 6975.28 raw computed of the two new sales LESS the 1200 overpaid).
-    assert s["remaining_to_pay_eur"] == "5775.28"
-    assert s["year_balance_eur"] == "-5775.28"
-    assert s["overpaid_overall"] is False
 
 
-def test_overpaid_overall_year_balance():
-    # Paid more than the whole year's liability -> remaining 0, refund expected.
+def test_paid_amount_counted_even_when_not_declared():
+    """Paid status is tracked per sale independently of declaration status."""
+    sales = [_sale("a", "2026-01-15", "100.00", declared=False, paid="100.00", paid_date="2026-02-01")]
+    s = summarize_declarations(sales, year=2026, symbol="MSFT")
+    assert s["declared_count"] == 0
+    assert s["paid_count"] == 1
+    assert s["total_paid_eur"] == "100.00"
+
+
+def test_legacy_rows_are_counted_and_flagged():
     sales = [
-        _sale("a", "2026-01-15", "1000.00", declared=True, paid="1500.00", paid_date="2026-02-01"),
+        _sale("old", "2026-01-15", "100.00", engine_version=None, is_legacy=True),
+        _sale("new", "2026-02-15", "50.00"),
     ]
     s = summarize_declarations(sales, year=2026, symbol="MSFT")
-    assert s["total_tax_eur"] == "1000.00"
-    assert s["total_paid_eur"] == "1500.00"
-    assert s["remaining_to_pay_eur"] == "0.00"
-    assert s["year_balance_eur"] == "500.00"
-    assert s["overpaid_overall"] is True
+    assert s["legacy_count"] == 1
+    old_row = next(r for r in s["sales"] if r["id"] == "old")
+    assert old_row["is_legacy"] is True
+    assert old_row["engine_version"] is None
+    new_row = next(r for r in s["sales"] if r["id"] == "new")
+    assert new_row["is_legacy"] is False
+    assert new_row["engine_version"] == "2026.08"
 
 
 def test_fully_declared_flag():
@@ -107,8 +138,7 @@ def test_fully_declared_flag():
     ]
     s = summarize_declarations(sales, year=2026, symbol="MSFT")
     assert s["fully_declared"] is True
-    assert s["remaining_tax_eur"] == "0.00"
-    assert s["over_under_eur"] == "0.00"
+    assert s["undeclared_tax_eur"] == "0.00"
 
 
 def test_declared_without_paid_amount_counts_as_declared_not_paid():
@@ -118,8 +148,6 @@ def test_declared_without_paid_amount_counts_as_declared_not_paid():
     assert s["paid_count"] == 0
     assert s["declared_tax_eur"] == "100.00"
     assert s["total_paid_eur"] == "0.00"
-    # No paid amount -> no reconciliation contribution
-    assert s["over_under_eur"] == "0.00"
 
 
 def test_sales_sorted_by_date():

@@ -311,22 +311,18 @@ export const api = {
     );
   },
 
-  getDeclarationSummary: (year: number, symbol = 'MSFT') =>
+  getDeclarationSummary: (year: number) =>
     request<{
       year: number;
       symbol: string;
       sale_count: number;
       declared_count: number;
       paid_count: number;
+      legacy_count: number;
       total_tax_eur: string;
       declared_tax_eur: string;
-      remaining_tax_eur: string;
+      undeclared_tax_eur: string;
       total_paid_eur: string;
-      computed_for_paid_eur: string;
-      over_under_eur: string;
-      remaining_to_pay_eur: string;
-      year_balance_eur: string;
-      overpaid_overall: boolean;
       fully_declared: boolean;
       total_proceeds_eur: string;
       total_acquisition_cost_eur: string;
@@ -345,8 +341,10 @@ export const api = {
         acquisition_cost_eur: string;
         gain_eur: string;
         loss_eur: string;
+        engine_version: string | null;
+        is_legacy: boolean;
       }[];
-    }>(`/transactions/tax-calculations/declaration-summary?year=${year}&symbol=${symbol}`),
+    }>(`/transactions/tax-calculations/declaration-summary?year=${year}`),
 
   getTaxCalculation: (id: string) =>
     request<{ id: string; calculation_json: Record<string, unknown> }>(`/transactions/tax-calculations/${id}`),

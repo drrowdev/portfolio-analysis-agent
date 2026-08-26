@@ -72,6 +72,47 @@ def test_simple_gain_and_dividend():
     assert s.dividend_payment_count == 1
 
 
+def test_dividends_can_be_excluded_from_the_bracket_base():
+    """Ennakkovero is applied for on gains only, so the bracket must match.
+
+    Dividends are reported on the annual return rather than through the
+    advance-tax application, so Verohallinto's ennakkovero basis contains no
+    dividend income. Including them here would push a sale into 34 % earlier
+    than the tax decision does. They are still reported separately.
+    """
+    txns = [
+        _buy("acc1", "MSFT", date(2024, 1, 10), 10, 100),
+        _sell("acc1", "MSFT", date(YEAR, 3, 1), 10, 150),
+        _div("acc1", "MSFT", date(YEAR, 6, 1), 200),
+    ]
+
+    with_div = compute_capital_income(txns, YEAR)
+    without_div = compute_capital_income(txns, YEAR, include_dividends=False)
+
+    # Gains are identical either way.
+    assert with_div.taxable_gains_eur == without_div.taxable_gains_eur == Decimal("500")
+    # Only the bracket base changes.
+    assert with_div.combined_taxable_eur == Decimal("670")
+    assert without_div.combined_taxable_eur == Decimal("500")
+    # Dividends are still visible, just not in the base.
+    assert without_div.gross_dividends_eur == Decimal("200")
+    assert without_div.taxable_dividends_eur == Decimal("170")
+    assert without_div.dividend_payment_count == 1
+
+
+def test_excluding_dividends_lowers_the_estimated_tax_to_gains_only():
+    txns = [
+        _buy("acc1", "MSFT", date(2024, 1, 10), 1000, 10),
+        _sell("acc1", "MSFT", date(YEAR, 3, 1), 1000, 50),
+        _div("acc1", "MSFT", date(YEAR, 6, 1), 10000),
+    ]
+    gains_only = compute_capital_income(txns, YEAR, include_dividends=False)
+
+    # Gain 40,000 -> 30k at 30 % + 10k at 34 %.
+    assert gains_only.combined_taxable_eur == Decimal("40000")
+    assert gains_only.estimated_tax_eur == Decimal("9000") + Decimal("3400")
+
+
 def test_buy_commission_increases_fifo_acquisition_basis():
     buy = _buy("acc1", "MSFT", date(2024, 1, 10), 1, 100)
     buy.fees = Decimal("10")

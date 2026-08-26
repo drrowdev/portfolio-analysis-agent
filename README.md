@@ -13,7 +13,7 @@ Investment portfolio cockpit for Finnish tax-aware accounts.
 - **Guardrailed streaming AI chat** — Ask portfolio questions without allowing the model to invent actionable buy, sell, or rebalance instructions
 - **Multi-broker import** — Nordnet (CSV) and Fidelity ESPP (PDF), with USD→EUR converted on import at each trade's historical ECB rate
 - **Manual trade entry & editing** — Record, edit, or delete trades with per-field EUR/USD currency toggles and trade-date FX rates
-- **Finnish capital-gains tax suite** — Per-sale ennakkovero calculator (per-lot hankintameno-olettama, 30 %/34 % bracket), year-to-date €30k capital-income tracker, and OmaVero declaration & payment tracking with PDF export
+- **Finnish capital-gains tax suite** — Per-sale ennakkovero calculator for the Fidelity ESPP MSFT position (per-lot hankintameno-olettama, 30 %/34 % bracket), the cumulative year-to-date figures to enter when changing the ennakkovero in OmaVero, a year-to-date €30k capital-income tracker, and per-sale declaration tracking with PDF export
 - **Finnish tax-aware accounts** — Arvo-osuustili, OST, ESPP, and Crypto account types
 - **Equity performance comparison** — Stock and ETF holdings are compared against the dividend-inclusive S&P 500 Total Return index in EUR; crypto is excluded
 - **Market news & alerts** — Price, earnings, rebalance, and news-triggered alerts
@@ -73,7 +73,7 @@ Investment portfolio cockpit for Finnish tax-aware accounts.
 | `/api/v1/holdings` | Holdings with live prices (native currency), quick trades |
 | `/api/v1/portfolio` | Portfolio summary, performance, allocation |
 | `/api/v1/transactions` | Transaction history, edit/delete, capital-income summary |
-| `/api/v1/transactions/tax-calculations` | Saved ennakkovero calcs: CRUD, OmaVero declaration tracking, PDF export |
+| `/api/v1/transactions/tax-calculations` | Saved ennakkovero calcs (MSFT/ESPP only): CRUD, OmaVero declaration tracking, PDF export |
 | `/api/v1/analysis` | Deterministic cockpit guidance and refresh, optional shadow AI research, proof-of-value evidence, and alpha backtests |
 | `/api/v1/analysis/guidance` | Cockpit snapshot; `/guidance/refresh` updates prices before rebuilding it |
 | `/api/v1/analysis/backtests` | Locked specification, ledger coverage, personal/universe execution, and immutable run results |
