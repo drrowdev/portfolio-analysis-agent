@@ -36,6 +36,89 @@ jobs:
           containerAppName: portfolio-backend
           imageToDeploy: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
+      # A Container App keeps serving the previous revision when a new one fails
+      # to start, and the deploy action reports success regardless. That hid a
+      # broken Alembic migration for weeks while production quietly ran an old
+      # image. Fail the run unless the revision built from THIS commit is the one
+      # actually serving traffic and answering /health.
+      - name: Verify the new revision is serving traffic
+        env:
+          APP_NAME: portfolio-backend
+          EXPECTED_IMAGE: ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          TIMEOUT_SECONDS: '600'
+        run: |
+          set -euo pipefail
+          az extension add --name containerapp --upgrade --only-show-errors >/dev/null 2>&1 || true
+
+          revision=""
+          deadline=$(( SECONDS + TIMEOUT_SECONDS ))
+
+          # Find the revision created from this commit's image.
+          while [ -z "$revision" ]; do
+            revision=$(az containerapp revision list \
+              --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+              --query "[?properties.template.containers[0].image=='$EXPECTED_IMAGE'].name | [-1]" \
+              --output tsv 2>/dev/null || true)
+            [ -n "$revision" ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::No revision was created for $EXPECTED_IMAGE"
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Waiting for revision $revision"
+
+          # Wait for it to become healthy and take over traffic.
+          while :; do
+            state=$(az containerapp revision show \
+              --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --revision "$revision" \
+              --query "[properties.healthState, properties.runningState, properties.trafficWeight]" \
+              --output tsv 2>/dev/null || true)
+            [ -z "$state" ] && state=$(printf 'unknown\tunknown\t0')
+            health=$(printf '%s' "$state" | cut -f1)
+            running=$(printf '%s' "$state" | cut -f2)
+            traffic=$(printf '%s' "$state" | cut -f3)
+            echo "health=$health running=$running traffic=$traffic"
+
+            if [ "$health" = "Healthy" ] && [ "$traffic" = "100" ]; then
+              break
+            fi
+            # Terminal failure states — no point waiting out the full timeout.
+            case "$running" in
+              Failed|Degraded)
+                echo "::error::Revision $revision entered state '$running'"
+                az containerapp logs show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+                  --revision "$revision" --tail 200 --type console || true
+                exit 1
+                ;;
+            esac
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Revision $revision did not become healthy and take traffic within ${TIMEOUT_SECONDS}s"
+              az containerapp logs show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+                --revision "$revision" --tail 200 --type console || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+          # Confirm the app itself answers, not just that the platform is happy.
+          fqdn=$(az containerapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --query "properties.configuration.ingress.fqdn" --output tsv)
+          for attempt in $(seq 1 10); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "https://$fqdn/health" || echo 000)
+            echo "attempt $attempt: GET /health -> $code"
+            [ "$code" = "200" ] && break
+            if [ "$attempt" -eq 10 ]; then
+              echo "::error::Backend health check never returned 200 (last: $code)"
+              az containerapp logs show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+                --revision "$revision" --tail 200 --type console || true
+              exit 1
+            fi
+            sleep 10
+          done
+
+          echo "Revision $revision is healthy, holds 100% of traffic and answers /health."
+
   deploy-frontend-swa:
     runs-on: ubuntu-latest
     steps:
@@ -59,10 +142,37 @@ jobs:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
 
       - name: Deploy to Azure Static Web Apps
+        id: swa
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           action: upload
           app_location: frontend/dist
           skip_app_build: true
-          skip_api_build: true
+
+      # The upload action can succeed without the site actually serving the new
+      # bundle, so confirm the deployed index.html is reachable and references a
+      # built asset before calling the deploy good.
+      - name: Verify the frontend is serving
+        env:
+          SWA_URL: ${{ steps.swa.outputs.static_web_app_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SWA_URL:-}" ]; then
+            echo "::warning::Static Web Apps deploy did not report a URL; skipping the serve check."
+            exit 0
+          fi
+          url="${SWA_URL%/}"
+          code=000
+          for attempt in $(seq 1 10); do
+            body=$(curl -sS --max-time 20 "$url/" || true)
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url/" || echo 000)
+            echo "attempt $attempt: GET $url/ -> $code"
+            if [ "$code" = "200" ] && printf '%s' "$body" | grep -q '/assets/index-'; then
+              echo "Frontend is serving a built bundle."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Frontend did not serve a built bundle (last status: $code)"
+          exit 1
